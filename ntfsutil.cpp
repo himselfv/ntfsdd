@@ -1,7 +1,6 @@
 #pragma once
 #include <windows.h>
 #include <winioctl.h>
-#include <assert.h>
 #include <iostream>
 #include <vector>
 #include <string>

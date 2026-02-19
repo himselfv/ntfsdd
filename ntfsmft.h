@@ -5,6 +5,9 @@
 #include "ntfsvolume.h"
 
 
+//Volume-relative byte number
+typedef LARGE_INTEGER VRBN;
+
 /*
 Файл описывается одним или несколькими (в разных сегментах) атрибутами $Data,
 которые содержат списки подряд идущих DataRun, описывающие VCN с первого по последний указанные для данного атрибута в данном сегменте.
@@ -52,8 +55,9 @@ public:
 	void load();
 	void loadMftStructure(LCN lcnFirst);
 
-	std::vector<char> readSegment(LCN lcn);
-	//vrOffset = volume-relative byte number
-	std::vector<char> readSegmentVrbn(LARGE_INTEGER vrOffset);
+	std::vector<char> newSegmentBuf();
+	void readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* segment);
+	void readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment);
+	void readSegmentVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment);
 	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header);
 };

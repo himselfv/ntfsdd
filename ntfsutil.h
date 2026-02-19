@@ -1,7 +1,6 @@
 #pragma once
 #include <windows.h>
 #include <winioctl.h>
-#include <assert.h>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -31,6 +30,8 @@ inline void throwLastOsError(const std::string& message) {
 	throwOsError(GetLastError(), message);
 }
 #define OSCHECKBOOL(...) if(!__VA_ARGS__) throwLastOsError(#__VA_ARGS__);
+
+#define assert(COND) if(!(COND)) throw std::runtime_error(#COND);
 
 
 class AttributeIterator {
@@ -111,7 +112,7 @@ public:
 			run.length = ReadSignedValue(ptr, sz & 0x0F);
 			ptr += sz & 0x0F;
 			run.offset += ReadSignedValue(ptr, sz >> 4);
-			ptr++;
+			ptr += (sz >> 4);
 		}
 
 		// Advance the generator

@@ -33,9 +33,6 @@ void NonResidentData::addAttr(ATTRIBUTE_RECORD_HEADER* attr) {
 Mft::Mft(Volume* volume)
 {
 	vol = volume;
-	// Pre-calculate and verify some values
-	assert(vol->volumeData().BytesPerFileRecordSegment % vol->volumeData().BytesPerSector == 0, "MFT segment size is not a multiple of logical sector size!");
-	this->SectorsPerFileSegment = vol->volumeData().BytesPerFileRecordSegment / vol->volumeData().BytesPerSector;
 }
 
 void Mft::load()
@@ -45,8 +42,14 @@ void Mft::load()
 
 void Mft::loadMftStructure(LCN lcnFirst)
 {
-	auto segment = readSegment(lcnFirst);
+	// Pre-calculate and verify some values
+	assert(vol->volumeData().BytesPerFileRecordSegment % vol->volumeData().BytesPerSector == 0, "MFT segment size is not a multiple of logical sector size!");
+	this->SectorsPerFileSegment = vol->volumeData().BytesPerFileRecordSegment / vol->volumeData().BytesPerSector;
+
+	auto segment = newSegmentBuf();
+	readSegmentLcn(lcnFirst, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
 	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
+	std::cout << "Sector: " << header->SequenceNumber << " " << header->BaseFileRecordSegment.SegmentNumberLowPart << " " << header->Flags << " " << header->FirstAttributeOffset << std::endl;
 
 	//Read attributes
 	ATTRIBUTE_RECORD_HEADER* attrData = nullptr;
@@ -72,36 +75,59 @@ void Mft::loadMftStructure(LCN lcnFirst)
 	assert(this->getFirstMissingVcn() == (uint64_t)(-1)); //Не поддерживаем пробелы в MFT
 }
 
-
-std::vector<char> Mft::readSegment(LCN lcn)
+std::vector<char> Mft::newSegmentBuf()
 {
-	LARGE_INTEGER vrOffset;
-	vrOffset.QuadPart = lcn * vol->volumeData().BytesPerCluster;
-	return this->readSegmentVrbn(vrOffset);
-}
-
-//vrOffset = volume-relative byte number
-std::vector<char> Mft::readSegmentVrbn(LARGE_INTEGER vrOffset)
-{
-	OSCHECKBOOL(SetFilePointerEx(vol->h(), vrOffset, nullptr, FILE_BEGIN));
-
 	auto segmentSize = vol->volumeData().BytesPerFileRecordSegment;
 	std::vector<char> segment;
 	segment.resize(segmentSize);
+	return segment;
+}
+
+void Mft::readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	//Сегмент может занимать несколько кластеров, тогда читаем, начиная с кластера.
+	if (vol->volumeData().ClustersPerFileRecordSegment > 0)
+		return this->readSegmentLcn(segmentIndex / vol->volumeData().ClustersPerFileRecordSegment, segment);
+
+	auto BytesPerCluster = vol->volumeData().BytesPerCluster;
+
+	//Иначе сегмент занимает меньше кластера.
+	//Нам нужно посчитать его VBN (virtual byte number) и поделить с остатком.
+	VRBN vrbn;
+	vrbn.QuadPart = segmentIndex * vol->volumeData().BytesPerFileRecordSegment;
+	VCN vcn = vrbn.QuadPart / BytesPerCluster;
+	vrbn.QuadPart %= BytesPerCluster;
+
+	auto lcn = this->getLcn(vcn);
+	assert(lcn >= 0);
+	vrbn.QuadPart += lcn * BytesPerCluster;
+
+	return this->readSegmentVrbn(vrbn, segment);
+}
+
+//Читает ПЕРВЫЙ сегмент в указанном логическом кластере. Их там может быть несколько!
+void Mft::readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	VRBN vrOffset;
+	vrOffset.QuadPart = lcn * vol->volumeData().BytesPerCluster;
+	return this->readSegmentVrbn(vrOffset, segment);
+}
+
+void Mft::readSegmentVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	OSCHECKBOOL(SetFilePointerEx(vol->h(), vrbn, nullptr, FILE_BEGIN));
+
+	auto segmentSize = vol->volumeData().BytesPerFileRecordSegment;
 
 	DWORD bytesRead = 0;
-	OSCHECKBOOL(ReadFile(vol->h(), segment.data(), segmentSize, &bytesRead, nullptr));
+	OSCHECKBOOL(ReadFile(vol->h(), segment, segmentSize, &bytesRead, nullptr));
 	assert(bytesRead == segmentSize);
 
-	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
+	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment);
 	assert(*((uint32_t*)(&(header->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
-
-	std::cout << "Sector: " << header->SequenceNumber << " " << header->BaseFileRecordSegment.SegmentNumberLowPart << " " << header->Flags << " " << header->FirstAttributeOffset << std::endl;
 
 	//Apply fixups
 	this->segmentApplyFixups(header);
-
-	return segment;
 }
 
 void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header)

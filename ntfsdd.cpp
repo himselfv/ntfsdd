@@ -1,6 +1,5 @@
 #include <windows.h>
 #include <winioctl.h>
-#include <assert.h>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -76,6 +75,8 @@ std::ostream& operator<<(std::ostream &os, const DdTrim &value) {
 
 class Volume2 : public Volume {
 public:
+	Mft mft = { this };
+
 	virtual void open(const std::string& path, DWORD dwOpenMode)
 	{
 		Volume::open(path, dwOpenMode);
@@ -87,7 +88,6 @@ public:
 	}
 
 	void loadMftStructure() {
-		Mft mft(this);
 		mft.loadMftStructure(this->volumeData().MftStartLcn.QuadPart);
 	}
 
@@ -142,22 +142,23 @@ void countClusters(VOLUME_BITMAP_BUFFER* bitmapBuffer)
 }
 
 
+void buildFileTable(Volume& vol, Mft& mft)
+{
+	auto totalSegments = vol.volumeData().MftValidDataLength.QuadPart / vol.volumeData().BytesPerFileRecordSegment;
+	std::cout << "Reading MFT segments..." << std::endl;
+	auto segment = mft.newSegmentBuf();
+	for (auto idx = 0; idx < totalSegments; idx++) {
+		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
+		mft.readSegmentByIndex(idx, (FILE_RECORD_SEGMENT_HEADER*)(segment.data()));
+	}
+}
+
+
 /*
-Hi! Please write a C++14 function which accepts a handles to source and destination partitions (hSrc and hDest), where hDest is supposed to be an older clone of hSrc and processes hSrc's entire MFT entry by entry. For each entry, it locates its accounting record in a map it maintains. If this is a base entry, it uses its own ID as a key, otherwise it uses the ID given as a base entry for this one. In this fashion, all entries belonging to the same file use the same accounting record. It compares the entry at hand bytewise to its counterpart in hDest and concludes if it's dirty or clean (or assumes dirty if the MFT doesn't cover this sector on hDest - e.g. because this is a span of MFT which had been added after the cloning time). It updates the accounting entry, marking it dirty once any of the entries falling under it is found dirty.
-In any case, dirty or not, the entry's attributes are then parsed, and for any that are non-resident, all the clusters referenced in all of their runs are appended to the set of clusters stored in the accounting record (initially empty).
-At completion, the function returns the map of base entry numbers to accounting records, each of which contains a flag indicating whether any of the entries which fall under it had been found dirty, and a list of all clusters mentioned in any runs, in any attributes, in any of those entries.
-
-
 struct FileAccounting {
 	bool isDirty = false;
 	std::set<uint64_t> clusterList;
 };
-
-// Logic to parse Non-Resident runs and add to the set
-void ParseRunList(const uint8_t* attrData, std::set<uint64_t>& clusters) {
-	// Implementation would decode the NTFS "Run List" variable-length encoding
-	// and insert every LCN (Logical Cluster Number) into the set.
-}
 
 std::map<uint64_t, FileAccounting> ProcessMftComparison(HANDLE hSrc, HANDLE hDest, uint32_t clusterSize) {
 	std::map<uint64_t, FileAccounting> mftMap;
@@ -317,6 +318,8 @@ int main2(int argc, char* argv[]) {
 
 	src.loadMftStructure();
 //	printMft(src, srcMft, 16);
+
+	buildFileTable(src, src.mft);
 
 	exit(-1);
 
