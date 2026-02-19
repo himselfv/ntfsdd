@@ -1,0 +1,10 @@
+syntax:glob
+.vs
+Debug
+x64
+*.idb
+*.obj
+*.pdb
+*.db
+*.opendb
+*.user
