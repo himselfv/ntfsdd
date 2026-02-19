@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <iostream>
 #include <vector>
+#include <string>
 #include "ntfs.h"
 
 //This might have better gone to osutil.h
@@ -17,42 +18,19 @@ public:
 	inline DWORD errorCode() { return this->m_errorCode; }
 };
 
-void throwOsError(DWORD err) {
+inline void throwOsError(DWORD err) {
 	throw OsError(err, std::string{ "Error " }+std::to_string(err));
 }
-void throwOsError(DWORD err, const std::string& message) {
+inline void throwOsError(DWORD err, const std::string& message) {
 	throw OsError(err, message + std::string{ "\nError " }+std::to_string(err));
 }
-void throwLastOsError() {
+inline void throwLastOsError() {
 	throwOsError(GetLastError());
 }
-void throwLastOsError(const std::string& message) {
+inline void throwLastOsError(const std::string& message) {
 	throwOsError(GetLastError(), message);
 }
 #define OSCHECKBOOL(...) if(!__VA_ARGS__) throwLastOsError(#__VA_ARGS__);
-
-
-
-/*
-LCN runs in nonresident attributes are variable-sized, from 1 to 15 bytes in length (in practice 8 bytes should be more than enough).
-They have to be sign-extended: the target variable (8 bytes) has to inherit sign of the lower-byte (1-3-5 byte) source.
-*/
-int64_t ReadSignedValue(const uint8_t* buffer, size_t size) {
-	int64_t value = 0;
-	// Copy the bytes into our 64-bit integer
-	for (size_t i = 0; i < size; ++i) {
-		value |= (int64_t)buffer[i] << (i * 8);
-	}
-
-	// Sign-extend: Check if the last byte's high bit is set
-	if (size > 0 && (buffer[size - 1] & 0x80)) {
-		// Fill the remaining leading bits with 1s
-		for (size_t i = size; i < sizeof(int64_t); ++i) {
-			value |= (int64_t)0xFF << (i * 8);
-		}
-	}
-	return value;
-}
 
 
 class AttributeIterator {
@@ -95,6 +73,12 @@ public:
 	Iterator end() { return{ nullptr }; }
 };
 
+
+/*
+LCN runs in nonresident attributes are variable-sized, from 1 to 15 bytes in length (in practice 8 bytes should be more than enough).
+They have to be sign-extended: the target variable (8 bytes) has to inherit sign of the lower-byte (1-3-5 byte) source.
+*/
+int64_t ReadSignedValue(const uint8_t* buffer, size_t size);
 
 struct ClusterRun {
 	LCN offset;

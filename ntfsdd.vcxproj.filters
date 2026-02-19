@@ -32,5 +32,14 @@
     <ClCompile Include="ntfsdd.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ntfsvolume.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ntfsutil.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ntfsmft.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

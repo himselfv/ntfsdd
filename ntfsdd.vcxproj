@@ -154,6 +154,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ntfsdd.cpp" />
+    <ClCompile Include="ntfsmft.cpp" />
+    <ClCompile Include="ntfsutil.cpp" />
+    <ClCompile Include="ntfsvolume.cpp" />
     <ClCompile Include="stdafx.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
