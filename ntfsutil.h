@@ -97,8 +97,8 @@ public:
 
 
 struct ClusterRun {
-	uint64_t offset;
-	uint64_t length;
+	LCN offset;
+	LCN length;
 };
 
 class DataRunIterator {

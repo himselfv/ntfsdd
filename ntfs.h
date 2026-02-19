@@ -3,6 +3,8 @@
 
 typedef LONGLONG VCN;
 typedef VCN *PVCN;
+typedef LONGLONG LCN;
+
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
 typedef struct _MFT_SEGMENT_REFERENCE {
