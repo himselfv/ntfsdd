@@ -36,7 +36,6 @@ inline void throwLastOsError(const std::string& message) {
 
 class AttributeIterator {
 public:
-	// 1. Define the Iterator
 	struct Iterator {
 		ATTRIBUTE_RECORD_HEADER* attr = nullptr;
 
@@ -64,12 +63,10 @@ public:
 		}
 	};
 
-	// 2. Data members for the generator state
 	FILE_RECORD_SEGMENT_HEADER* header = nullptr;
 
 	AttributeIterator(FILE_RECORD_SEGMENT_HEADER* header) : header(header) {}
 
-	// 3. Begin and End methods for range-based for loop
 	Iterator begin() { return{ (ATTRIBUTE_RECORD_HEADER*)((char*)header + header->FirstAttributeOffset) }; }
 	Iterator end() { return{ nullptr }; }
 };
@@ -80,6 +77,7 @@ LCN runs in nonresident attributes are variable-sized, from 1 to 15 bytes in len
 They have to be sign-extended: the target variable (8 bytes) has to inherit sign of the lower-byte (1-3-5 byte) source.
 */
 int64_t ReadSignedValue(const uint8_t* buffer, size_t size);
+int64_t ReadUnsignedValue(const uint8_t* buffer, size_t size);
 
 struct ClusterRun {
 	LCN offset;
@@ -88,7 +86,6 @@ struct ClusterRun {
 
 class DataRunIterator {
 public:
-	// 1. Define the Iterator
 	struct Iterator {
 		uint8_t* ptr = nullptr;
 		ClusterRun run{ 0, 0 };
@@ -109,7 +106,7 @@ public:
 			if (*ptr == 0x00) { ptr = nullptr; return; } //To satisfy comparison with end().
 			auto sz = *ptr;
 			ptr++;
-			run.length = ReadSignedValue(ptr, sz & 0x0F);
+			run.length = ReadUnsignedValue(ptr, sz & 0x0F);
 			ptr += sz & 0x0F;
 			run.offset += ReadSignedValue(ptr, sz >> 4);
 			ptr += (sz >> 4);
@@ -122,12 +119,10 @@ public:
 		}
 	};
 
-	// 2. Data members for the generator state
 	ATTRIBUTE_RECORD_HEADER* attr = nullptr;
 
 	DataRunIterator(ATTRIBUTE_RECORD_HEADER* attr) : attr(attr) {}
 
-	// 3. Begin and End methods for range-based for loop
 	Iterator begin() { return{ (uint8_t*)attr + attr->Form.Nonresident.MappingPairsOffset }; }
 	Iterator end() { return{ nullptr }; }
 };

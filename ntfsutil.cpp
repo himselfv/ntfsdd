@@ -26,3 +26,12 @@ int64_t ReadSignedValue(const uint8_t* buffer, size_t size) {
 	}
 	return value;
 }
+
+int64_t ReadUnsignedValue(const uint8_t* buffer, size_t size) {
+	int64_t value = 0;
+	// Copy the bytes into our 64-bit integer
+	for (size_t i = 0; i < size; ++i) {
+		value |= (int64_t)buffer[i] << (i * 8);
+	}
+	return value;
+}
