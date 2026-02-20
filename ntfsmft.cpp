@@ -110,7 +110,7 @@ void Mft::readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* s
 	assert(lcn >= 0);
 	vrbn.QuadPart += lcn * BytesPerCluster;
 
-	return this->readSegmentVrbn(vrbn, segment);
+	return this->readSegmentsVrbn(vrbn, segment, 1);
 }
 
 //Читает ПЕРВЫЙ сегмент в указанном логическом кластере. Их там может быть несколько!
@@ -118,27 +118,32 @@ void Mft::readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment)
 {
 	VRBN vrOffset;
 	vrOffset.QuadPart = lcn * vol->volumeData().BytesPerCluster;
-	return this->readSegmentVrbn(vrOffset, segment);
+	return this->readSegmentsVrbn(vrOffset, segment, 1);
 }
 
-void Mft::readSegmentVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment)
+void Mft::readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count)
 {
 	OSCHECKBOOL(SetFilePointerEx(vol->h(), vrbn, nullptr, FILE_BEGIN));
-	return readSegmentNoSeek(segment);
+	return readSegmentsNoSeek(segment, count);
 }
 
-void Mft::readSegmentNoSeek(FILE_RECORD_SEGMENT_HEADER* segment)
+void Mft::readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count)
 {
 	DWORD bytesRead = 0;
-	OSCHECKBOOL(ReadFile(vol->h(), segment, BytesPerFileSegment, &bytesRead, nullptr));
-	assert(bytesRead == BytesPerFileSegment);
+	OSCHECKBOOL(ReadFile(vol->h(), segment, count*BytesPerFileSegment, &bytesRead, nullptr));
+	assert(bytesRead == count*BytesPerFileSegment);
 
-	//So apparently records can be uninitialized. These appear closer to the end of the MFT.
-	bool isValidSegment = (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
+	while (count > 0) {
+		//So apparently records can be uninitialized. These appear closer to the end of the MFT.
+		bool isValidSegment = (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
 
-	//Apply fixups
-	if (isValidSegment)
-		this->segmentApplyFixups(segment);
+		//Apply fixups
+		if (isValidSegment)
+			this->segmentApplyFixups(segment);
+
+		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + BytesPerFileSegment);
+		count--;
+	}
 }
 
 void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header)
@@ -158,11 +163,33 @@ void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header)
 	}
 }
 
+
 ExclusiveSegmentIterator::ExclusiveSegmentIterator(Mft* mft)
 	: mft(mft)
 {
 	if (mft == nullptr) return; //null-initialized end() iterator
-	segment.resize(mft->BytesPerFileSegment);
+#ifdef SEGMENTITERATOR_BATCHREAD
+	//Наш блок на чтение:
+	//- Однозначно кратен сегменту
+	//- Лучше, чтобы кратен кластеру, чтобы проще было решать вопросы чтения
+	//- Лучше всего ориентироваться на физический размер сектора диска, но SSD часто говорят его неправильно,
+	//  512, когда реальный размер 4096.
+	auto batchSize = mft->vol->volumeData().BytesPerFileRecordSegment;
+	//Сегменты могут быть больше одного кластера! Хоть это и редко делают на практике.
+	if (mft->vol->volumeData().BytesPerCluster > batchSize)
+		batchSize = mft->vol->volumeData().BytesPerCluster;
+	if (mft->vol->extendedVolumeData().BytesPerPhysicalSector > batchSize)
+		batchSize = mft->vol->extendedVolumeData().BytesPerPhysicalSector;
+	//В любом случае выравниваем на размер сегмента
+	auto remainder = batchSize % mft->vol->volumeData().BytesPerFileRecordSegment;
+	if (remainder != 0)
+		batchSize = (batchSize + mft->vol->volumeData().BytesPerFileRecordSegment) - remainder;
+	//Умножаем!
+	batchSize *= SEGMENTITERATOR_BATCHSIZE;
+	buffer.resize(batchSize);
+#else
+	buffer.resize(mft->BytesPerFileSegment);
+#endif
 	remainingRuns = (int)mft->vcnMap().size();
 	if (remainingRuns > 0) {
 		currentRun = mft->vcnMap().data();
@@ -198,4 +225,46 @@ void ExclusiveSegmentIterator::openRun()
 	} else
 		remainingSegmentsInRun = ((bytesPerCluster * currentRun->len) / mft->BytesPerFileSegment) - 1;
 	OSCHECKBOOL(SetFilePointerEx(mft->vol->h(), vrbn, nullptr, FILE_BEGIN));
+#ifdef SEGMENTITERATOR_BATCHREAD
+	assert(remainingBufferData == 0); //just in case
+#endif
+}
+
+
+void ExclusiveSegmentIterator::readCurrent()
+{
+#ifdef SEGMENTITERATOR_BATCHREAD
+	if (remainingBufferData >= mft->BytesPerFileSegment) {
+		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
+		remainingBufferData -= mft->BytesPerFileSegment;
+		//Не проверяем, что remainingBufferData делится на BytesPerFileSegment без остатка! Это должно быть верно.
+	}
+	else {
+		//Читаем новый участок, в пределах доступного в этом run
+		auto segmentCount = buffer.size() / mft->BytesPerFileSegment;
+		if (segmentCount > remainingSegmentsInRun+1) //1 уже вычтен перед вызовом этого чтения
+			segmentCount = remainingSegmentsInRun+1;
+		segment = (FILE_RECORD_SEGMENT_HEADER*)(buffer.data());
+#ifdef SEGMENTITERATOR_ZEROMEM
+		memset(buffer.data(), 0, buffer.size());
+#endif
+#ifdef SEGMENTITERATOR_EXCLUSIVE
+		mft->readSegmentsNoSeek(segment, segmentCount);
+#else
+		mft->readSegmentsVrbn(vrbn, segment, segmentCount);
+#endif
+		remainingBufferData = (segmentCount - 1)*(mft->BytesPerFileSegment);
+	}
+#else
+#ifdef SEGMENTITERATOR_EXCLUSIVE
+	mft->readSegmentNoSeek((FILE_RECORD_SEGMENT_HEADER*)buffer.data(), 1);
+#else
+	mft->readSegmentVrbn(vrbn, (FILE_RECORD_SEGMENT_HEADER*)buffer.data(), 1);
+#endif
+#endif
+
+#ifdef SEGMENTITERATOR_TRACKPOS
+	lbn += mft->BytesPerFileSegment;
+	vcn++;
+#endif
 }

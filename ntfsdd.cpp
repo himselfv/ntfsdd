@@ -141,27 +141,17 @@ void countClusters(VOLUME_BITMAP_BUFFER* bitmapBuffer)
 	printf("Used: %I64d, free: %I64d\n", clusters_used, clusters_free);
 }
 
-/*
 void buildFileTable(Volume& vol, Mft& mft)
 {
-	auto totalSegments = vol.volumeData().MftValidDataLength.QuadPart / vol.volumeData().BytesPerFileRecordSegment;
-	std::cout << "Reading MFT segments..." << std::endl;
-	auto segment = mft.newSegmentBuf();
-	for (auto idx = 0; idx < totalSegments; idx++) {
-		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
-		mft.readSegmentByIndex(idx, (FILE_RECORD_SEGMENT_HEADER*)(segment.data()));
-	}
-}
-*/
-void buildFileTable(Volume& vol, Mft& mft)
-{
+	auto t1 = GetTickCount();
 	auto totalSegments = vol.volumeData().MftValidDataLength.QuadPart / vol.volumeData().BytesPerFileRecordSegment;
 	std::cout << "Reading MFT segments..." << std::endl;
 	VCN idx = 0;
 	for (auto& segment : ExclusiveSegmentIter(&mft)) {
-		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
+//		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
 		idx++;
 	}
+	std::cout << (GetTickCount() - t1) << std::endl;
 }
 
 
@@ -332,8 +322,7 @@ int main2(int argc, char* argv[]) {
 //	printMft(src, srcMft, 16);
 
 	buildFileTable(src, src.mft);
-
-	exit(-1);
+	return 0;
 
 
 	DWORD clusterSize = src.volumeData().BytesPerCluster;

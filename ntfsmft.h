@@ -72,8 +72,8 @@ public:
 	std::vector<char> newSegmentBuf();
 	void readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* segment);
 	void readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment);
-	void readSegmentVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment);
-	void readSegmentNoSeek(FILE_RECORD_SEGMENT_HEADER* segment);
+	void readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count);
+	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count);
 	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header);
 
 	inline bool isValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
@@ -81,7 +81,23 @@ public:
 };
 
 
+//#define SEGMENTITERATOR_EXCLUSIVE
+//Exclusive mode: Assume no one else is moving the file pointer in the MFT you're holding.
+//Saves on regular SetFilePointer calls. Less important with large batches.
+
+#define SEGMENTITERATOR_BATCHREAD
+//Read data in batches. Hugely speeds up processing.
+
+#define SEGMENTITERATOR_BATCHSIZE 16
+//Read this number of clusters/disk sectors/segments, whichever is larger.
+//After 16-32x 4Kb the gains are marginal.
+
 //#define SEGMENTITERATOR_TRACKPOS
+//Track additional counters while iterating. Sometimes useful for debugging.
+
+//#define SEGMENTITERATOR_ZEROMEM
+//Zero the buffer memory before each read. Helps debug accidental reuse of stale data
+//(e.g. you've read less than expected but old data looks valid and masks this).
 /*
 ѕытаетс€ читать MFT быстрее, эконом€ на повторных установках FilePointer. ћожно использовать одновременно максимум один!
 */
@@ -96,12 +112,20 @@ struct ExclusiveSegmentIterator {
 	VCN vcn = 0;
 #endif
 
-	ExclusiveSegmentIterator(Mft* mft);
-
-	std::vector<uint8_t> segment;
-
+	std::vector<uint8_t> buffer;
+#ifdef SEGMENTITERATOR_BATCHREAD
+	int64_t remainingBufferData = 0;
+	FILE_RECORD_SEGMENT_HEADER* segment = nullptr;
 	// Access the current value
-	inline FILE_RECORD_SEGMENT_HEADER& operator*() { return *((FILE_RECORD_SEGMENT_HEADER*)(segment.data())); }
+	inline FILE_RECORD_SEGMENT_HEADER& operator*() { return *segment; }
+#else
+	// Access the current value
+	inline FILE_RECORD_SEGMENT_HEADER& operator*() { return *((FILE_RECORD_SEGMENT_HEADER*)(buffer.data())); }
+#endif
+	void readCurrent();
+
+
+	ExclusiveSegmentIterator(Mft* mft);
 
 	// Comparison for the loop termination
 	inline bool operator!=(const ExclusiveSegmentIterator& other) const {
@@ -113,23 +137,11 @@ struct ExclusiveSegmentIterator {
 	//Open currently selected run. It must have at least one segment.
 	void openRun();
 
-	inline void readCurrent()
-	{
-//		mft->readSegmentVrbn(vrbn, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
-		mft->readSegmentNoSeek((FILE_RECORD_SEGMENT_HEADER*)segment.data());
-#ifdef SEGMENTITERATOR_TRACKPOS
-		lbn += mft->BytesPerFileSegment;
-		vcn++;
-#endif
-	}
-
 	// Advance the generator
 	inline ExclusiveSegmentIterator& operator++() {
 		if (remainingSegmentsInRun > 0) {
 			remainingSegmentsInRun--;
-#ifdef SEGMENTITERATOR_TRACKPOS
-			vrbn.QuadPart += mft->BytesPerFileSegment;
-#endif
+			vrbn.QuadPart += mft->BytesPerFileSegment; //ќтслеживаем всегда, т.к. нужно дл€ нескольких механизмов сразу.
 		}
 		else {
 			this->advanceRun();
