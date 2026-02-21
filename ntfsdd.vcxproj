@@ -153,6 +153,7 @@
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="bitmap.cpp" />
     <ClCompile Include="ntfsdd.cpp" />
     <ClCompile Include="ntfsmft.cpp" />
     <ClCompile Include="ntfsutil.cpp" />

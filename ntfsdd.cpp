@@ -8,6 +8,7 @@
 #include "ntfsutil.h"
 #include "ntfsvolume.h"
 #include "ntfsmft.h"
+#include "bitmap.h"
 #include <CLI/CLI.hpp>
 
 
@@ -157,87 +158,12 @@ void verifyMftLayout(Volume& vol, Mft& mft, const VOLUME_BITMAP_BUFFER* bitmap)
 }
 
 
-
-struct Bitmap {
-public:
-	constexpr static size_t BLOCK_BITS = sizeof(uint64_t) * 8;
-	uint64_t* data = nullptr;
-	int64_t size = 0;
-	Bitmap() {};
-	Bitmap(void* data) : data(static_cast<uint64_t*>(data)) {};
-	void set(size_t lo, size_t hi) {
-		if (lo > hi) return;
-		assert(hi < size);
-
-		size_t start_word = lo / BLOCK_BITS;
-		size_t end_word = hi / BLOCK_BITS;
-		size_t start_bit = lo % BLOCK_BITS;
-		size_t end_bit = hi % BLOCK_BITS;
-
-		// The entire range is within a single 64-bit word
-		if (start_word == end_word) {
-			uint64_t mask = (~0ULL << start_bit) & (~0ULL >> (BLOCK_BITS-1 - end_bit));
-			data[start_word] |= mask;
-			return;
-		}
-
-		// Range spans multiple words
-		data[start_word] |= (~0ULL << start_bit);
-		if (end_word > start_word + 1)
-			std::memset(&data[start_word + 1], 0xFF, (end_word - start_word - 1) * sizeof(uint64_t));
-		data[end_word] |= (~0ULL >> (BLOCK_BITS-1 - end_bit));
-	}
-	void clear(size_t lo, size_t hi) {
-		if (lo > hi) return;
-		assert(hi < size);
-
-		size_t start_word = lo / BLOCK_BITS;
-		size_t end_word = hi / BLOCK_BITS;
-		size_t start_bit = lo % BLOCK_BITS;
-		size_t end_bit = hi % BLOCK_BITS;
-
-		if (start_word == end_word) {
-			uint64_t mask = (~0ULL << start_bit) & (~0ULL >> (BLOCK_BITS-1 - end_bit));
-			data[start_word] &= ~mask;
-			return;
-		}
-
-		// Range spans multiple words
-		data[start_word] &= ~(~0ULL << start_bit);
-		if (end_word > start_word + 1)
-			std::memset(&data[start_word + 1], 0x00, (end_word - start_word - 1) * sizeof(uint64_t));
-		data[end_word] &= ~(~0ULL >> (BLOCK_BITS-1 - end_bit));
-	}
-};
-struct BitmapAuto : public Bitmap {
-public:
-	std::vector<uint8_t> buffer;
-	BitmapAuto() {}
-	BitmapAuto(size_t size) {
-		this->resize(size);
-	}
-	void resize(size_t size) {
-		buffer.resize((size + 7) / 8);
-		this->data = static_cast<uint64_t*>((void*)(buffer.data()));
-		this->size = buffer.size() * 8;
-		this->clear_all();
-	}
-	void clear_all() {
-		this->clear(0, buffer.size() * 8 - 1);
-	}
-};
-
-struct FileTable {
-	BitmapAuto bmp;
-};
-
-FileTable buildFileTable(Volume& vol, Mft& mft, int64_t totalClusters)
+//Rebuilds volume bitmap from first principles (from the MFT).
+void rebuildVolumeBitmap(Volume& vol, Mft& mft, BitmapBuf* bmp)
 {
-	FileTable ret;
-	ret.bmp.resize(totalClusters);
+	bmp->resize(vol.volumeData().TotalClusters.QuadPart);
 
 	auto totalSegments = vol.volumeData().MftValidDataLength.QuadPart / vol.volumeData().BytesPerFileRecordSegment;
-	std::cout << "Reading MFT segments..." << std::endl;
 	SegmentNumber idx = 0;
 	for (auto& segment : ExclusiveSegmentIter(&mft)) {
 		if (!mft.isValidSegment(&segment)) continue;
@@ -245,13 +171,13 @@ FileTable buildFileTable(Volume& vol, Mft& mft, int64_t totalClusters)
 		for (auto& attr : AttributeIterator(&segment)) {
 			if (attr.FormCode != NONRESIDENT_FORM) continue;
 			for (auto& run : DataRunIterator(&attr))
-				ret.bmp.set(run.offset, run.offset + run.length - 1);
+				bmp->set(run.offset, run.offset + run.length - 1);
 		}
-		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
+		if (idx % 1000 == 0) std::cerr << idx << " / " << totalSegments << std::endl;
 		idx++;
 	}
-	return ret;
 }
+
 
 void compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 {
@@ -261,6 +187,7 @@ void compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 	if (diff >= 0)
 		throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
 }
+
 
 /*
 Получает указатели на два MFT, source и dest. Возвращает две карты кластеров:
@@ -290,9 +217,8 @@ struct FileEntry {
 	std::vector<ClusterRun> runList;
 };
 
-void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapAuto& srcUsed, BitmapAuto& srcDiff)
+void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, BitmapBuf& srcDiff)
 {
-	FileTable ret;
 	std::unordered_map<int64_t, FileEntry> filemap;
 
 	//Убеждаемся, что конфигурация диска одна и та же
@@ -364,11 +290,6 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapAuto& srcUsed, BitmapAuto& s
 					baseSegmentNumber = idx;
 					break;
 				}
-
-		//Если запись одиночная и не dirty, то вопросов к ней больше нет.
-		//Хотя стоп, есть. Мы должны в любом случае отметиться в полном списке секторов.
-//		if ((baseSegmentNumber==0) && !dirty)
-//			continue;
 
 		//Иначе перебираем атрибуты, но сначала добываем для мульти-записи её учётную запись.
 		FileEntry* multiSegmentEntry = nullptr;
@@ -483,17 +404,17 @@ int main2(int argc, char* argv[]) {
 	/*
 	std::cout << "Building file table..." << std::endl;
 	auto t1 = GetTickCount();
-	auto srcFt = buildFileTable(src, src.mft, src.volumeData().TotalClusters.QuadPart);
+	BitmapBuf srcUsed;
+	rebuildVolumeBitmap(src, src.mft, &srcUsed);
 	std::cout << (GetTickCount() - t1) << std::endl;
 	*/
 
 	std::cout << "Building file table bitmaps..." << std::endl;
 	auto t1 = GetTickCount();
-	BitmapAuto srcUsed;
-	BitmapAuto srcDiff;
+	BitmapBuf srcUsed;
+	BitmapBuf srcDiff;
 	fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff);
 	std::cout << (GetTickCount() - t1) << std::endl;
-
 
 	//Убеждаемся, что srcUsed действительно закрывает то же, что говорит $Bitmap.
 	std::cout << "Verifying file table bitmap..." << std::endl;
