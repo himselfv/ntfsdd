@@ -4,6 +4,7 @@
 typedef LONGLONG VCN;
 typedef VCN *PVCN;
 typedef LONGLONG LCN;
+typedef int64_t SegmentNumber;
 
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference

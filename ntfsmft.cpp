@@ -48,7 +48,7 @@ void NonResidentData::readAll(void* buf)
 		auto remSz = this->dataHeader.Form.Nonresident.AllocatedLength - run.vcnStart*BytesPerCluster;
 		if (remSz < readSz)
 			readSz = remSz;
-		OSCHECKBOOL(ReadFile(vol->h(), ptr, readSz, &bytesRead, nullptr));
+		OSCHECKBOOL(ReadFile(vol->h(), ptr, (DWORD)readSz, &bytesRead, nullptr));
 		assert(bytesRead == readSz);
 		ptr += bytesRead;
 	}
@@ -206,7 +206,7 @@ NtfsBitmapFile::NtfsBitmapFile(Volume* vol, Mft* mft)
 	this->buf->BitmapSize.QuadPart = vol->volumeData().TotalClusters.QuadPart; //This can be slightly less
 
 	//Either the cluster count matches or it's rounded up.
-	assert(this->sizeInBytes() == this->buf->BitmapSize.QuadPart / 8 + ((this->buf->BitmapSize.QuadPart % 8 == 0) ? 0 : 1))
+	assert(this->sizeInBytes() == (this->buf->BitmapSize.QuadPart + 7) / 8);
 }
 
 NtfsBitmapFile::~NtfsBitmapFile()
@@ -296,7 +296,7 @@ void ExclusiveSegmentIterator::readCurrent()
 	}
 	else {
 		//Читаем новый участок, в пределах доступного в этом run
-		auto segmentCount = buffer.size() / mft->BytesPerFileSegment;
+		SegmentNumber segmentCount = (int64_t)(buffer.size()) / mft->BytesPerFileSegment;
 		if (segmentCount > remainingSegmentsInRun+1) //1 уже вычтен перед вызовом этого чтения
 			segmentCount = remainingSegmentsInRun+1;
 		segment = (FILE_RECORD_SEGMENT_HEADER*)(buffer.data());
