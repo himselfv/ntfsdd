@@ -35,8 +35,29 @@ void NonResidentData::addAttr(ATTRIBUTE_RECORD_HEADER* attr) {
 	std::sort(m_vcnMap.begin(), m_vcnMap.end(), [](const VcnMapEntry& a, const VcnMapEntry& b) { return a.vcnStart < b.vcnStart; });
 }
 
+void NonResidentData::readAll(void* buf)
+{
+	auto BytesPerCluster = vol->volumeData().BytesPerCluster;
+	auto ptr = ((uint8_t*)buf);
+	for (auto& run : this->m_vcnMap) {
+		DWORD bytesRead = 0;
+		LARGE_INTEGER vrbn;
+		vrbn.QuadPart = run.lcnStart*BytesPerCluster;
+		OSCHECKBOOL(SetFilePointerEx(vol->h(), vrbn, nullptr, FILE_BEGIN));
+		auto readSz = run.len*BytesPerCluster;
+		auto remSz = this->dataHeader.Form.Nonresident.AllocatedLength - run.vcnStart*BytesPerCluster;
+		if (remSz < readSz)
+			readSz = remSz;
+		OSCHECKBOOL(ReadFile(vol->h(), ptr, readSz, &bytesRead, nullptr));
+		assert(bytesRead == readSz);
+		ptr += bytesRead;
+	}
+}
+
+
 
 Mft::Mft(Volume* volume)
+	: NonResidentData(volume)
 {
 	vol = volume;
 }
@@ -162,6 +183,40 @@ void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header)
 		fixupCnt--;
 	}
 }
+
+
+NtfsBitmapFile::NtfsBitmapFile(Volume* vol, Mft* mft)
+	: NonResidentData(vol)
+{
+	std::vector<uint8_t> buffer;
+	buffer.resize(vol->volumeData().BytesPerFileRecordSegment);
+	auto segment = (FILE_RECORD_SEGMENT_HEADER*)(buffer.data());
+	mft->readSegmentByIndex(BIT_MAP_FILE_NUMBER, segment);
+	auto attr = AttributeIterator::findFirstAttr(segment, $DATA);
+	assert(attr != nullptr);
+	this->addAttr(attr);
+
+	assert(attr->FormCode == NONRESIDENT_FORM);
+	auto allocSize = sizeof(VOLUME_BITMAP_BUFFER) + attr->Form.Nonresident.AllocatedLength;
+	this->buf = (VOLUME_BITMAP_BUFFER*)malloc(allocSize); //Rounded up to cluster for ease of reading
+	this->readAll(&(buf->Buffer[0]));
+
+	//Fill data in our VOLUME_BITMAP_BUFFER for some compatibility
+	this->buf->StartingLcn.QuadPart = 0;
+	this->buf->BitmapSize.QuadPart = vol->volumeData().TotalClusters.QuadPart; //This can be slightly less
+
+	//Either the cluster count matches or it's rounded up.
+	assert(this->sizeInBytes() == this->buf->BitmapSize.QuadPart / 8 + ((this->buf->BitmapSize.QuadPart % 8 == 0) ? 0 : 1))
+}
+
+NtfsBitmapFile::~NtfsBitmapFile()
+{
+	if (this->buf != nullptr) {
+		free(this->buf);
+		this->buf = nullptr;
+	}
+}
+
 
 
 ExclusiveSegmentIterator::ExclusiveSegmentIterator(Mft* mft)

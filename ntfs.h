@@ -38,6 +38,37 @@ typedef struct _FILE_RECORD_SEGMENT_HEADER {
 //  UPDATE_SEQUENCE_ARRAY UpdateSequenceArray;
 } FILE_RECORD_SEGMENT_HEADER, *PFILE_RECORD_SEGMENT_HEADER;
 
+//
+//  FILE_xxx flags.
+//
+
+#define FILE_RECORD_SEGMENT_IN_USE       (0x0001)
+#define FILE_FILE_NAME_INDEX_PRESENT     (0x0002)
+
+
+
+//
+//  System File Numbers.
+//
+
+#define MASTER_FILE_TABLE_NUMBER         (0)   //  $Mft
+#define MASTER_FILE_TABLE2_NUMBER        (1)   //  $MftMirr
+#define LOG_FILE_NUMBER                  (2)   //  $LogFile
+#define VOLUME_DASD_NUMBER               (3)   //  $Volume
+#define ATTRIBUTE_DEF_TABLE_NUMBER       (4)   //  $AttrDef
+#define ROOT_FILE_NAME_INDEX_NUMBER      (5)   //  .
+#define BIT_MAP_FILE_NUMBER              (6)   //  $BitMap
+#define BOOT_FILE_NUMBER                 (7)   //  $Boot
+#define BAD_CLUSTER_FILE_NUMBER          (8)   //  $BadClus
+#define QUOTA_TABLE_NUMBER               (9)   //  $Quota
+#define UPCASE_TABLE_NUMBER              (10)  //  $UpCase
+#define CAIRO_NUMBER                     (11)  //  $Cairo
+#define FIRST_USER_FILE_NUMBER           (16)
+
+
+//
+//  Attribute Type Codes.
+//
 
 typedef ULONG ATTRIBUTE_TYPE_CODE;
 typedef ATTRIBUTE_TYPE_CODE *PATTRIBUTE_TYPE_CODE;

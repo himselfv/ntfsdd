@@ -41,5 +41,5 @@ public:
 
 	void verifyNtfsVersion();
 
-	VOLUME_BITMAP_BUFFER* getVolumeBitmap();
+	VOLUME_BITMAP_BUFFER* queryVolumeBitmap();
 };

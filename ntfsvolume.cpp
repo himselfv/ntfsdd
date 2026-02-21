@@ -62,7 +62,27 @@ void Volume::verifyNtfsVersion()
 	assert(extendedVolumeData().MinorVersion <= 1);
 }
 
-VOLUME_BITMAP_BUFFER* Volume::getVolumeBitmap()
+
+/*
+https://community.osr.com/t/locking-ntfs-volume-dismounts-it/16419/9
+> FSCTL_GET_VOLUME_BITMAP for NTFS volumes succeeds only if either
+> - you don’t lock the volume at all
+> - or set dwShareMode in CreateFile to FILE_SHARE_READ or zero and lock it
+> However, this doesn’t look right. The docs say that for FSCTL_LOCK_VOLUME,
+> you must set dwShareMode in CreateFile to FILE_SHARE_READ | FILE_SHARE_WRITE.
+From my experience, this also applies to shadow copies.
+
+People advise:
+> If you open volume with share access 0 file system will effectively lock the
+> volume for you - you don’t need to issue FSCTL_LOCK_VOLUME.
+> This open fails if there are some handles opened on the volume and
+> subsequent open requests will fail while volume is opened.
+Might not be quite right. Kernel mode actors might still consider it unlocked? Idk.
+
+Another option is to read the bitmap manually. But this won't work for FAT.
+Not that we handle FAT here.
+*/
+VOLUME_BITMAP_BUFFER* Volume::queryVolumeBitmap()
 {
 	// Get the Occupancy Bitmap
 	// STARTING_LCN_INPUT_BUFFER contains the starting cluster (0)

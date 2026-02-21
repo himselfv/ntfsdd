@@ -69,6 +69,14 @@ public:
 
 	Iterator begin() { return{ (ATTRIBUTE_RECORD_HEADER*)((char*)header + header->FirstAttributeOffset) }; }
 	Iterator end() { return{ nullptr }; }
+
+	static ATTRIBUTE_RECORD_HEADER* findFirstAttr(FILE_RECORD_SEGMENT_HEADER* segment, ATTRIBUTE_TYPE_CODE typeCode) {
+		for (auto& attr : AttributeIterator(segment)) {
+			if (attr.TypeCode == typeCode)
+				return &attr;
+		}
+		return nullptr;
+	}
 };
 
 

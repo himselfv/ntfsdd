@@ -39,17 +39,25 @@ Attribute record header for the first of our run-listing attributes (LowestVcn==
 Contains:
   AllocatedLength: Multiple of cluster size, total allocated space.
   FileSize: Actual size, in bytes, precise.
-  ValidDataLength: Actual size, rounded up to cluster.
+  ValidDataLength: <= actual size, performance optimization, do not use. Not always aligned on clusters in practice.
 */
 	ATTRIBUTE_RECORD_HEADER dataHeader;
 public:
+	Volume* vol;
+	NonResidentData(Volume* vol) : vol(vol) {}
 	inline const std::vector<VcnMapEntry>& vcnMap() { return this->m_vcnMap; }
 	LCN getLcn(VCN vcn);
 	//Некоторые файлы могут быть sparse, но иногда хочется проверить, что дыр нет.
 	VCN getFirstMissingVcn();
 	void addAttr(ATTRIBUTE_RECORD_HEADER* attr);
 	inline int64_t sizeInBytes() { return this->dataHeader.Form.Nonresident.FileSize; }
+	inline int64_t sizeInClusterMultiples() { return this->dataHeader.Form.Nonresident.AllocatedLength; }
+
+	//Doesn't work for files with holes.
+	//Only reads full clusters (== multiples of logical sectors). Make sure you have enough space - use sizeInClusterMultiples()!
+	void readAll(void* buf);
 };
+
 
 /*
 От MFT нам нужен следующий функционал:
@@ -58,7 +66,6 @@ public:
 */
 class Mft : public NonResidentData {
 public:
-	Volume* vol;
 	int32_t SectorsPerFileSegment = 0;
 	int BytesPerFileSegment = 0;
 public:
@@ -78,6 +85,15 @@ public:
 
 	inline bool isValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
 		return (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE")); };
+};
+
+class NtfsBitmapFile : public NonResidentData {
+public:
+	VOLUME_BITMAP_BUFFER* buf = nullptr;
+	inline uint8_t* data() { return buf->Buffer; }
+	inline LCN totalClusters() { return buf->BitmapSize.QuadPart; }
+	NtfsBitmapFile(Volume* vol, Mft* mft);
+	~NtfsBitmapFile();
 };
 
 

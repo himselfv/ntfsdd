@@ -141,108 +141,134 @@ void countClusters(VOLUME_BITMAP_BUFFER* bitmapBuffer)
 	printf("Used: %I64d, free: %I64d\n", clusters_used, clusters_free);
 }
 
-void buildFileTable(Volume& vol, Mft& mft)
+void verifyMftLayout(Volume& vol, Mft& mft, const VOLUME_BITMAP_BUFFER* bitmap)
 {
+	//Проверяем, что MFT более-менее закрывает собой весь диск.
+	auto& volData = vol.volumeData();
+
+	//Размеры посекторно и покластерно могут различаться с точностью до большего из них
+	int64_t totalBytes = volData.NumberSectors.QuadPart*volData.BytesPerSector;
+	auto totalBytesDiff = totalBytes - volData.TotalClusters.QuadPart*volData.BytesPerCluster;
+	assert(totalBytesDiff < ((volData.BytesPerCluster > volData.BytesPerSector) ? volData.BytesPerCluster : volData.BytesPerSector));
+
+	assert(volData.TotalClusters.QuadPart == bitmap->StartingLcn.QuadPart + bitmap->BitmapSize.QuadPart);
+}
+
+
+
+struct Bitmap {
+public:
+	constexpr static size_t BLOCK_BITS = sizeof(uint64_t) * 8;
+	uint64_t* data = nullptr;
+	int64_t size = 0;
+	Bitmap() {};
+	Bitmap(void* data) : data(static_cast<uint64_t*>(data)) {};
+	void set(size_t lo, size_t hi) {
+		if (lo > hi) return;
+		assert(hi < size);
+
+		size_t start_word = lo / BLOCK_BITS;
+		size_t end_word = hi / BLOCK_BITS;
+		size_t start_bit = lo % BLOCK_BITS;
+		size_t end_bit = hi % BLOCK_BITS;
+
+		// The entire range is within a single 64-bit word
+		if (start_word == end_word) {
+			uint64_t mask = (~0ULL << start_bit) & (~0ULL >> (BLOCK_BITS-1 - end_bit));
+			data[start_word] |= mask;
+			return;
+		}
+
+		// Range spans multiple words
+		data[start_word] |= (~0ULL << start_bit);
+		if (end_word > start_word + 1)
+			std::memset(&data[start_word + 1], 0xFF, (end_word - start_word - 1) * sizeof(uint64_t));
+		data[end_word] |= (~0ULL >> (BLOCK_BITS-1 - end_bit));
+	}
+	void clear(size_t lo, size_t hi) {
+		if (lo > hi) return;
+		assert(hi < size);
+
+		size_t start_word = lo / BLOCK_BITS;
+		size_t end_word = hi / BLOCK_BITS;
+		size_t start_bit = lo % BLOCK_BITS;
+		size_t end_bit = hi % BLOCK_BITS;
+
+		if (start_word == end_word) {
+			uint64_t mask = (~0ULL << start_bit) & (~0ULL >> (BLOCK_BITS-1 - end_bit));
+			data[start_word] &= ~mask;
+			return;
+		}
+
+		// Range spans multiple words
+		data[start_word] &= ~(~0ULL << start_bit);
+		if (end_word > start_word + 1)
+			std::memset(&data[start_word + 1], 0x00, (end_word - start_word - 1) * sizeof(uint64_t));
+		data[end_word] &= ~(~0ULL >> (BLOCK_BITS-1 - end_bit));
+	}
+};
+struct BitmapAuto : public Bitmap {
+public:
+	std::vector<uint8_t> buffer;
+	BitmapAuto() {}
+	BitmapAuto(size_t size) {
+		this->resize(size);
+	}
+	void resize(size_t size) {
+		buffer.resize((size + 7) / 8);
+		this->data = static_cast<uint64_t*>((void*)(buffer.data()));
+		this->size = buffer.size() * 8;
+		this->clear_all();
+	}
+	void clear_all() {
+		this->clear(0, buffer.size() * 8 - 1);
+	}
+};
+
+struct FileEntry {
+	bool dirty = false;
+	std::set<uint64_t> clusterList;
+};
+
+std::map<int64_t, FileEntry> filemap;
+
+struct FileTable {
+	BitmapAuto bmp;
+};
+
+FileTable buildFileTable(Volume& vol, Mft& mft, int64_t totalClusters)
+{
+	FileTable ret;
+	ret.bmp.resize(totalClusters);
+
 	auto t1 = GetTickCount();
 	auto totalSegments = vol.volumeData().MftValidDataLength.QuadPart / vol.volumeData().BytesPerFileRecordSegment;
 	std::cout << "Reading MFT segments..." << std::endl;
 	VCN idx = 0;
 	for (auto& segment : ExclusiveSegmentIter(&mft)) {
-//		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
+		if (!mft.isValidSegment(&segment)) continue;
+		if ((segment.Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
+		for (auto& attr : AttributeIterator(&segment)) {
+			if (attr.FormCode != NONRESIDENT_FORM) continue;
+			for (auto& run : DataRunIterator(&attr))
+				ret.bmp.set(run.offset, run.offset + run.length - 1);
+		}
+		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
 		idx++;
 	}
 	std::cout << (GetTickCount() - t1) << std::endl;
+	return ret;
 }
 
-
-
-/*
-struct FileAccounting {
-	bool isDirty = false;
-	std::set<uint64_t> clusterList;
-};
-
-std::map<uint64_t, FileAccounting> ProcessMftComparison(HANDLE hSrc, HANDLE hDest, uint32_t clusterSize) {
-	std::map<uint64_t, FileAccounting> mftMap;
-
-	const size_t mftEntrySize = 1024; // Standard NTFS MFT record size
-	std::vector<uint8_t> bufferSrc(mftEntrySize);
-	std::vector<uint8_t> bufferDest(mftEntrySize);
-
-	uint64_t currentEntryIndex = 0;
-	DWORD bytesReadSrc, bytesReadDest;
-
-	// In a real scenario, you would determine the total MFT size from the $MFT entry itself
-	while (ReadFile(hSrc, bufferSrc.data(), mftEntrySize, &bytesReadSrc, nullptr) && bytesReadSrc == mftEntrySize) {
-
-		auto* headerSrc = reinterpret_cast<MftEntryHeader*>(bufferSrc.data());
-		if (headerSrc->magic != 0x454C4946) { // "FILE"
-			currentEntryIndex++;
-			continue;
-		}
-
-		// 1. Identify the Accounting Key
-		uint64_t baseKey = (headerSrc->baseMftRecord == 0) ? currentEntryIndex : headerSrc->baseMftRecord;
-		auto& record = mftMap[baseKey];
-
-		// 2. Determine Dirty State via Bytewise Comparison
-		bool isCurrentEntryDirty = false;
-		// Check if hDest is large enough to contain this MFT entry
-		if (ReadFile(hDest, bufferDest.data(), mftEntrySize, &bytesReadDest, nullptr) && bytesReadDest == mftEntrySize) {
-			if (std::memcmp(bufferSrc.data(), bufferDest.data(), mftEntrySize) != 0) {
-				isCurrentEntryDirty = true;
-			}
-		}
-		else {
-			// Destination is smaller or MFT hasn't grown there yet
-			isCurrentEntryDirty = true;
-		}
-
-		if (isCurrentEntryDirty) {
-			record.isDirty = true;
-		}
-
-		// 3. Parse Attributes for Non-Resident Clusters
-		uint16_t attrOffset = headerSrc->firstAttrOffset;
-		while (attrOffset < headerSrc->usedSize) {
-			auto* attr = reinterpret_cast<const uint8_t*>(bufferSrc.data() + attrOffset);
-			uint32_t type = *reinterpret_cast<const uint32_t*>(attr);
-
-			if (type == 0xFFFFFFFF) break; // End of attributes
-
-			uint8_t nonResidentFlag = *(attr + 8);
-			uint32_t length = *reinterpret_cast<const uint32_t*>(attr + 4);
-
-			if (nonResidentFlag != 0) { // If attribute is Non-Resident
-				ParseRunList(attr, record.clusterList);
-			}
-
-			attrOffset += length;
-
-
-			if (length == 0) break;
-		}
-
-		currentEntryIndex++;
-	}
-
-	return mftMap;
-}
-*/
-
-void printMft(Volume& vol, HANDLE hMft, int cnt)
+void compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 {
-	auto segmentSize = vol.volumeData().BytesPerFileRecordSegment;
-	DWORD bytesRead = 0;
-	std::vector<char> segment;
-	segment.resize(segmentSize);
-	for (auto i = 0; i < cnt; i++) {
-		if (!ReadFile(hMft, segment.data(), segmentSize, &bytesRead, nullptr))
-			throwLastOsError("Reading MFT sector.");
-		auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
-		std::cout << "Sector: " << i << " " << header->MultiSectorHeader.Signature << " " << header->Flags << " " << header->SequenceNumber << std::endl;
-	}
+	if (bmp1->StartingLcn.QuadPart % (sizeof(int64_t) * 8) != 0)
+		throw std::runtime_error("StartingLcn is not a multiple of a sufficiently beautiful number, I didn't expect that!");
+	auto diff = memcmp(bmp1->Buffer, &bmp2->data[bmp1->StartingLcn.QuadPart / (sizeof(int64_t) * 8)], (bmp1->BitmapSize.QuadPart + 7) / 8);
+	if (diff >= 0)
+		throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
 }
+
 
 int main2(int argc, char* argv[]) {
 	CLI::App app{ "NTFS Rapid Delta dd", "ntfsdd" };
@@ -314,41 +340,30 @@ int main2(int argc, char* argv[]) {
 	*/
 
 	// Open and scan MFT
-//	auto srcMft = src.openMft();
-//	std::cerr << srcMft << std::endl;
-//	auto destMft = dest.openMft();
-
 	src.loadMftStructure();
-//	printMft(src, srcMft, 16);
 
-	buildFileTable(src, src.mft);
+	std::cout << "Loading stored bitmap..." << std::endl;
+	NtfsBitmapFile srcBitmap(&src, &src.mft);
+
+	std::cout << "Verifying MFT layout..." << std::endl;
+	verifyMftLayout(src, src.mft, srcBitmap.buf);
+
+
+	std::cout << "Building file table..." << std::endl;
+	auto srcFt = buildFileTable(src, src.mft, src.volumeData().TotalClusters.QuadPart);
+
+	std::cout << "Verifying file table bitmap..." << std::endl;
+	compareBitmaps(srcBitmap.buf, &(srcFt.bmp));
 	return 0;
 
 
+	dest.loadMftStructure();
+	VOLUME_BITMAP_BUFFER* destBitmap = dest.queryVolumeBitmap();
+	verifyMftLayout(dest, dest.mft, destBitmap);
+
+
+
 	DWORD clusterSize = src.volumeData().BytesPerCluster;
-
-	VOLUME_BITMAP_BUFFER* srcBitmap = src.getVolumeBitmap();
-	VOLUME_BITMAP_BUFFER* dstBitmap = dest.getVolumeBitmap();
-
-/*
-For cluster iteration:
-
-	for (LONGLONG i = 0; i < numClusters.QuadPart; i++) {
-		// Find the bit in the byte array
-		bool isAllocated = (bitmapBuffer->Buffer[i / 8] & (1 << (i % 8))) != 0;
-
-		if (isAllocated) {
-			clusters_used++;
-			LARGE_INTEGER byteOffset;
-			byteOffset.QuadPart = i * clusterSize;
-
-			// Call your verify-write logic
-			ReadVerifyWrite(hSrc, hDest, byteOffset, clusterSize);
-		}
-		else
-			clusters_free++;
-*/
-
 
 	/*
 	Alignment: Ensure your "blocks" for verification match the SSD's physical page size (usually 4KB or 16KB) or the NTFS cluster size (usually 4KB).
@@ -358,8 +373,8 @@ For cluster iteration:
 	*/
 
 	// Cleanup
-	free(dstBitmap);
-	free(srcBitmap);
+	free(destBitmap);
+	//free(srcBitmap);
 
 	std::cout << "Done.\n";
 	return 0;
