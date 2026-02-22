@@ -25,13 +25,13 @@ std::string enumName(Enum value) {
 }
 
 
-enum class DdAction : int { List, Verify, Copy, Rvw, VerifyBitmap };
+enum class DdAction : int { List, Compare, Copy, Rvw, VerifyBitmap };
 template<> struct EnumNames<DdAction> {
 	typedef std::map<std::string, DdAction> Map;
 	static const Map map() {
 		static const Map m{
 			{ "list", DdAction::List },			//List candidate sectors
-			{ "verify", DdAction::Verify },		//Verify candidate sectors
+			{ "compare", DdAction::Compare },	//Compare candidate sectors
 			{ "copy", DdAction::Copy },			//Copy all candidate sectors
 			{ "rvw", DdAction::Rvw },			//Verify candidate sectors and copy the changed ones
 			{ "verifyBitmap", DdAction::VerifyBitmap },	//Rebuild $Bitmap from MFT and compare to the actual one.
@@ -180,13 +180,11 @@ void rebuildVolumeBitmap(Volume& vol, Mft& mft, BitmapBuf* bmp)
 }
 
 
-void compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
+LCN compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 {
 	if (bmp1->StartingLcn.QuadPart % (sizeof(int64_t) * 8) != 0)
 		throw std::runtime_error("StartingLcn is not a multiple of a sufficiently beautiful number, I didn't expect that!");
-	auto diff = memcmp(bmp1->Buffer, &bmp2->data[bmp1->StartingLcn.QuadPart / (sizeof(int64_t) * 8)], (bmp1->BitmapSize.QuadPart + 7) / 8);
-	if (diff >= 0)
-		throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
+	return memcmp(bmp1->Buffer, &bmp2->data[bmp1->StartingLcn.QuadPart / (sizeof(int64_t) * 8)], (bmp1->BitmapSize.QuadPart + 7) / 8);
 }
 
 
@@ -325,7 +323,7 @@ int main2(int argc, char* argv[]) {
 	CLI::App app{ "NTFS Rapid Delta dd", "ntfsdd" };
 
 	std::string srcPath, destPath;
-	DdAction action{ DdAction::Verify };
+	DdAction action{ DdAction::Compare };
 	DdMode mode{ DdMode::MFT };
 	DdTrim trim{ (DdTrim)(-1) };
 	bool bSafetyOverride = false;
@@ -411,18 +409,34 @@ int main2(int argc, char* argv[]) {
 		rebuildVolumeBitmap(src, src.mft, &srcUsed);
 		std::cout << (GetTickCount() - t1) << std::endl;
 	}
-	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Verify || action == DdAction::Rvw) {
+	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
 		std::cout << "Building file table bitmaps..." << std::endl;
 		auto t1 = GetTickCount();
-		fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff);
+		switch (mode) {
+		case DdMode::All:
+			srcDiff.push_back(0, src.volumeData().TotalClusters);
+			break;
+		case DdMode::Bitmap:
+			//TODO: Нам всё равно нужен итератор последовательных блоков в битмапе.
+			break;
+		case DdMode::MFT:
+			fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff);
+			break;
+		}
 		std::cout << (GetTickCount() - t1) << std::endl;
 	}
 
-	//Убеждаемся, что srcUsed действительно закрывает то же, что говорит $Bitmap.
-	std::cout << "Verifying file table bitmap..." << std::endl;
-	compareBitmaps(srcBitmap.buf, &srcUsed);
+	//Если в результате VerifyBitmap или любого действия с mode==MFT расчитали карту кластеров, то сравниваем её с $Bitmap.
+	//Но в неявных случаях молчим, если всё в порядке.
+	if (srcUsed.size > 0) {
+		//Убеждаемся, что srcUsed действительно закрывает то же, что говорит $Bitmap.
+		std::cout << "Verifying file table bitmap..." << std::endl;
+		auto diff = compareBitmaps(srcBitmap.buf, &srcUsed);
+		if (diff >= 0)
+			throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
+	}
 
-	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Verify || action == DdAction::Rvw) {
+	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
 		int64_t dirtySectorCount = 0;
 		for (size_t idx = 0; idx < srcDiff.size; idx++)
 			if (srcDiff.get(idx)) {
