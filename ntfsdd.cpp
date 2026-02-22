@@ -25,15 +25,16 @@ std::string enumName(Enum value) {
 }
 
 
-enum class DdAction : int { List, Verify, Copy, Rvw };
+enum class DdAction : int { List, Verify, Copy, Rvw, VerifyBitmap };
 template<> struct EnumNames<DdAction> {
 	typedef std::map<std::string, DdAction> Map;
 	static const Map map() {
 		static const Map m{
-			{ "list", DdAction::List },
-			{ "verify", DdAction::Verify },
-			{ "copy", DdAction::Copy },
-			{ "rvw", DdAction::Rvw },
+			{ "list", DdAction::List },			//List candidate sectors
+			{ "verify", DdAction::Verify },		//Verify candidate sectors
+			{ "copy", DdAction::Copy },			//Copy all candidate sectors
+			{ "rvw", DdAction::Rvw },			//Verify candidate sectors and copy the changed ones
+			{ "verifyBitmap", DdAction::VerifyBitmap },	//Rebuild $Bitmap from MFT and compare to the actual one.
 		};
 		return m;
 	}
@@ -47,9 +48,9 @@ template<> struct EnumNames<DdMode> {
 	typedef std::map<std::string, DdMode> Map;
 	static const Map map() {
 		const Map m{
-			{ "all", DdMode::All },
-			{ "bitmap", DdMode::Bitmap },
-			{ "mft", DdMode::MFT },
+			{ "all", DdMode::All },			//All sectors
+			{ "bitmap", DdMode::Bitmap },	//All sectors in use at source according to $Bitmap
+			{ "mft", DdMode::MFT },			//All sectors in use at source according to MFT segments that differ from destination
 		};
 		return m;
 	}
@@ -401,33 +402,36 @@ int main2(int argc, char* argv[]) {
 	verifyMftLayout(src, src.mft, srcBitmap.buf);
 	verifyMftLayout(dest, dest.mft, nullptr);
 
-	/*
-	std::cout << "Building file table..." << std::endl;
-	auto t1 = GetTickCount();
-	BitmapBuf srcUsed;
-	rebuildVolumeBitmap(src, src.mft, &srcUsed);
-	std::cout << (GetTickCount() - t1) << std::endl;
-	*/
-
-	std::cout << "Building file table bitmaps..." << std::endl;
-	auto t1 = GetTickCount();
 	BitmapBuf srcUsed;
 	BitmapBuf srcDiff;
-	fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff);
-	std::cout << (GetTickCount() - t1) << std::endl;
+	if (action == DdAction::VerifyBitmap) {
+		std::cout << "Recalculating $Bitmap..." << std::endl;
+		auto t1 = GetTickCount();
+
+		rebuildVolumeBitmap(src, src.mft, &srcUsed);
+		std::cout << (GetTickCount() - t1) << std::endl;
+	}
+	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Verify || action == DdAction::Rvw) {
+		std::cout << "Building file table bitmaps..." << std::endl;
+		auto t1 = GetTickCount();
+		fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff);
+		std::cout << (GetTickCount() - t1) << std::endl;
+	}
 
 	//Убеждаемся, что srcUsed действительно закрывает то же, что говорит $Bitmap.
 	std::cout << "Verifying file table bitmap..." << std::endl;
 	compareBitmaps(srcBitmap.buf, &srcUsed);
 
-	int64_t dirtySectorCount = 0;
-	for (size_t idx = 0; idx < srcDiff.size; idx++)
-		if (srcDiff.get(idx)) {
-			dirtySectorCount++;
-			if (action == DdAction::List)
-				std::cout << idx << std::endl;
-		}
-	std::cout << "Dirty sector count: " << dirtySectorCount << std::endl;
+	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Verify || action == DdAction::Rvw) {
+		int64_t dirtySectorCount = 0;
+		for (size_t idx = 0; idx < srcDiff.size; idx++)
+			if (srcDiff.get(idx)) {
+				dirtySectorCount++;
+				if (action == DdAction::List)
+					std::cout << idx << std::endl;
+			}
+		std::cout << "Dirty sector count: " << dirtySectorCount << std::endl;
+	}
 
 	// Cleanup
 	std::cout << "Done.\n";

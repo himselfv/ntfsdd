@@ -304,9 +304,9 @@ void ExclusiveSegmentIterator::readCurrent()
 		memset(buffer.data(), 0, buffer.size());
 #endif
 #ifdef SEGMENTITERATOR_EXCLUSIVE
-		mft->readSegmentsNoSeek(segment, segmentCount);
+		mft->readSegmentsNoSeek(segment, (int)segmentCount);
 #else
-		mft->readSegmentsVrbn(vrbn, segment, segmentCount);
+		mft->readSegmentsVrbn(vrbn, segment, (int)segmentCount);
 #endif
 		remainingBufferData = (segmentCount - 1)*(mft->BytesPerFileSegment);
 	}
