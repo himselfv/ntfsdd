@@ -24,3 +24,57 @@ public:
 	BitmapBuf(size_t size);
 	void resize(size_t size);
 };
+
+class BitmapSpans {
+public:
+	static constexpr size_t BLOCK_BITS = Bitmap::BLOCK_BITS;
+	struct Iterator {
+		//Normally always points at 0 or at the end
+		const uint64_t* ptr;
+		size_t size = 0;
+
+		ClusterRun current;
+
+		Iterator(const uint64_t* ptr, size_t size) : ptr(ptr), size(size) { current.offset = 0; }
+
+		// Comparison for the loop termination
+		bool operator!=(const Iterator& other) const {
+			return ptr != other.ptr;
+		}
+
+		// Access the current value
+		inline ClusterRun operator*() { return current; }
+
+		void findFirst();
+
+		//On entrance, must point to 0.
+		//Skips the 0s. On exit, either points to 1 or nulls the ptr.
+		void skip0s();
+
+		//On entrance, must point to 1.
+		//Reads the 1s until hitting either 0 or EOF. Does not null the ptr, allowing this to be a hit. Next skip0s() is going to do that.
+		void eat1s();
+
+		// Advance the generator
+		Iterator& operator++() {
+			this->skip0s();
+			if (this->ptr)
+				this->eat1s();
+			return *this;
+		}
+	};
+
+
+	Bitmap* bmp = nullptr;
+	BitmapSpans(Bitmap* bmp) : bmp(bmp) {}
+
+	inline Iterator begin() {
+		// We must ensure we start at the first '1' bit
+		Iterator it(bmp->data, bmp->size);
+		it.findFirst();
+		return it;
+
+	}
+	Iterator end() { return{ nullptr, 0 }; }
+};
+
