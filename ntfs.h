@@ -5,6 +5,7 @@ typedef LONGLONG VCN;
 typedef VCN *PVCN;
 typedef LONGLONG LCN;
 typedef int64_t SegmentNumber;
+typedef ULONGLONG LSN, *PLSN;
 
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
@@ -28,14 +29,15 @@ typedef struct _MULTI_SECTOR_HEADER {
 //This structure definition is valid only for major version 3 and minor version 0 or 1, as reported by FSCTL_GET_NTFS_VOLUME_DATA.
 typedef struct _FILE_RECORD_SEGMENT_HEADER {
   MULTI_SECTOR_HEADER   MultiSectorHeader;
-  ULONGLONG             Reserved1;
+  LSN					Lsn;
   USHORT                SequenceNumber;
-  USHORT                Reserved2;
+  USHORT				ReferenceCount;
   USHORT                FirstAttributeOffset;
-  USHORT                Flags;
-  ULONG                 Reserved3[2];
+  USHORT                Flags;						//  FILE_xxx flags.
+  ULONG					FirstFreeByte;				// In this segment, for attribute storage.
+  ULONG					BytesAvailable;				// -- // --
   FILE_REFERENCE        BaseFileRecordSegment;
-  USHORT                Reserved4;
+  USHORT				NextAttributeInstance;
 //  UPDATE_SEQUENCE_ARRAY UpdateSequenceArray;
 } FILE_RECORD_SEGMENT_HEADER, *PFILE_RECORD_SEGMENT_HEADER;
 
@@ -109,7 +111,8 @@ typedef struct _ATTRIBUTE_RECORD_HEADER {
 		struct {
 			ULONG  ValueLength;
 			USHORT ValueOffset;
-			UCHAR  Reserved[2];
+			UCHAR  ResidentFlags;	//  RESIDENT_FORM_xxx Flags.
+			UCHAR  Reserved1;
 		} Resident;
 		struct {
 			VCN      LowestVcn;
