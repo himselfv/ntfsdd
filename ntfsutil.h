@@ -92,6 +92,7 @@ struct ClusterRun {
 	LCN length = 0;
 	ClusterRun() {}
 	ClusterRun(LCN offset, LCN length) : offset(offset), length(length) {}
+	bool operator==(const ClusterRun& other) const { return (offset == other.offset) && (length == other.length); }
 };
 
 class DataRunIterator {

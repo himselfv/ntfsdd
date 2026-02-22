@@ -15,7 +15,10 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ntfsdd.cpp">
+    <ClCompile Include="ntfsdd-tests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="bitmap.tests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
