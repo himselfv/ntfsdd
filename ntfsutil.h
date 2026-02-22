@@ -88,8 +88,10 @@ int64_t ReadSignedValue(const uint8_t* buffer, size_t size);
 int64_t ReadUnsignedValue(const uint8_t* buffer, size_t size);
 
 struct ClusterRun {
-	LCN offset;
-	LCN length;
+	LCN offset = 0;
+	LCN length = 0;
+	ClusterRun() {}
+	ClusterRun(LCN offset, LCN length) : offset(offset), length(length) {}
 };
 
 class DataRunIterator {

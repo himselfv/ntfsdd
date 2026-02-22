@@ -189,6 +189,26 @@ LCN compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 
 
 /*
+At this point it feels like keeping this as a vector of runs is more efficient than a bitmap.
+We're normally going to have not a lot of these run candidates and we'll want to read in continuous chunks anyway.
+std::map could keep us sorted, but we don't really need sorted.
+
+We're going to make this a little bit compatible with Bitmap, but do not expect us to handle overlapping ClusterRuns.
+These do not normally occur in our tasks.
+*/
+class CandidateClusterMap : public std::vector<ClusterRun> {
+public:
+	CandidateClusterMap() {
+		//Reserve a lot of space for efficiency
+		this->reserve(8192);
+	}
+	inline void set(const LCN offset, const LCN length) { this->emplace_back(offset, length); }
+	inline void set(const ClusterRun& run) { this->push_back(run); }
+};
+
+typedef std::vector<ClusterRun> RunList;
+
+/*
 Получает указатели на два MFT, source и dest. Возвращает две карты кластеров:
 1. Все использованные кластеры по мнению первой MFT (мнение второй - устарело).
 2. Все кластеры, которые необходимо проверить на изменения.
@@ -216,7 +236,7 @@ struct FileEntry {
 	std::vector<ClusterRun> runList;
 };
 
-void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, BitmapBuf& srcDiff)
+void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClusterMap& srcDiff)
 {
 	std::unordered_map<int64_t, FileEntry> filemap;
 
@@ -238,10 +258,10 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, BitmapBuf& src
 		}
 	}
 
+
 	srcUsed.resize(TotalClusters);
 	srcUsed.clear_all();
-	srcDiff.resize(TotalClusters);
-	srcDiff.clear_all();
+	srcDiff.clear();
 
 	std::cout << "Reading MFT segments..." << std::endl;
 	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
@@ -305,7 +325,7 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, BitmapBuf& src
 				if (multiSegmentEntry != nullptr)
 					multiSegmentEntry->runList.push_back(run);
 				else if (dirty)
-					srcDiff.set(run.offset, run.offset + run.length - 1);
+					srcDiff.set(run);
 			}
 		}
 	}
@@ -314,7 +334,7 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, BitmapBuf& src
 	for (auto& pair : filemap)
 		if (pair.second.dirty) {
 			for (auto& run : pair.second.runList)
-				srcDiff.set(run.offset, run.offset + run.length - 1);
+				srcDiff.set(run);
 		}
 }
 
@@ -401,7 +421,7 @@ int main2(int argc, char* argv[]) {
 	verifyMftLayout(dest, dest.mft, nullptr);
 
 	BitmapBuf srcUsed;
-	BitmapBuf srcDiff;
+	CandidateClusterMap srcDiff;
 	if (action == DdAction::VerifyBitmap) {
 		std::cout << "Recalculating $Bitmap..." << std::endl;
 		auto t1 = GetTickCount();
@@ -414,7 +434,7 @@ int main2(int argc, char* argv[]) {
 		auto t1 = GetTickCount();
 		switch (mode) {
 		case DdMode::All:
-			srcDiff.push_back(0, src.volumeData().TotalClusters);
+			srcDiff.emplace_back(0, src.volumeData().TotalClusters.QuadPart);
 			break;
 		case DdMode::Bitmap:
 			//TODO: Нам всё равно нужен итератор последовательных блоков в битмапе.
@@ -436,7 +456,9 @@ int main2(int argc, char* argv[]) {
 			throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
 	}
 
+
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
+	/*
 		int64_t dirtySectorCount = 0;
 		for (size_t idx = 0; idx < srcDiff.size; idx++)
 			if (srcDiff.get(idx)) {
@@ -445,6 +467,7 @@ int main2(int argc, char* argv[]) {
 					std::cout << idx << std::endl;
 			}
 		std::cout << "Dirty sector count: " << dirtySectorCount << std::endl;
+	*/
 	}
 
 	// Cleanup
