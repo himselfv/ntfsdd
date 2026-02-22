@@ -420,6 +420,15 @@ int main2(int argc, char* argv[]) {
 	std::cout << "Verifying file table bitmap..." << std::endl;
 	compareBitmaps(srcBitmap.buf, &srcUsed);
 
+	int64_t dirtySectorCount = 0;
+	for (size_t idx = 0; idx < srcDiff.size; idx++)
+		if (srcDiff.get(idx)) {
+			dirtySectorCount++;
+			if (action == DdAction::List)
+				std::cout << idx << std::endl;
+		}
+	std::cout << "Dirty sector count: " << dirtySectorCount << std::endl;
+
 	// Cleanup
 	std::cout << "Done.\n";
 	return 0;
