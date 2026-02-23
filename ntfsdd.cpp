@@ -236,7 +236,11 @@ struct FileEntry {
 	std::vector<ClusterRun> runList;
 };
 
-void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClusterMap& srcDiff)
+struct DiffStats {
+	SegmentNumber dirtySegments = 0;
+};
+
+void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClusterMap& srcDiff, DiffStats* stats)
 {
 	std::unordered_map<int64_t, FileEntry> filemap;
 
@@ -274,13 +278,15 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
 
 		bool dirty = false;
-		//Достаём такой же сегмент из правого MFT
-		//Это надо сделать в любом случае, даже если левый сектор невалидный, т.к. мы должны идти нога в ногу.
-		if (destIt != destIter.end())
-			++destIt;
-		if (destIt != destIter.end());
-		else
-			dirty = true;
+		if (idx > 0) { //For idx==0 we've already read destIter.begin().
+			//Достаём такой же сегмент из правого MFT
+			//Это надо сделать в любом случае, даже если левый сектор невалидный, т.к. мы должны идти нога в ногу.
+			if (destIt != destIter.end())
+				++destIt;
+			if (destIt != destIter.end());
+			else
+				dirty = true;
+		}
 
 		//Невалидные слева сегменты пропускаем
 		//Даже если когда-то они ссылались на какие-то кластеры, всё это сводится к ситуации "кластеры больше не используются",
@@ -292,7 +298,9 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 
 		//Если итератор справа есть, то сравниваем кластеры.
 		if (!dirty)
-			dirty = (0 == memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
+			dirty = (0 != memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
+		if (dirty && stats)
+			stats->dirtySegments++;
 
 		//Дальше выясняем, является ли этот сегмент особым.
 		//Простые сегменты можно сразу же помечать по кластерам. Для особых нужно добавить их кластеры в базовую запись.
@@ -437,11 +445,15 @@ int main2(int argc, char* argv[]) {
 			srcDiff.emplace_back(0, src.volumeData().TotalClusters.QuadPart);
 			break;
 		case DdMode::Bitmap:
-			//TODO: Нам всё равно нужен итератор последовательных блоков в битмапе.
+			for (auto& run : BitmapSpans((uint64_t*)srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart))
+				srcDiff.push_back(run);
 			break;
-		case DdMode::MFT:
-			fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff);
+		case DdMode::MFT: {
+			DiffStats stats;
+			fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff, &stats);
+			std::cout << "Dirty segments: " << stats.dirtySegments << std::endl;
 			break;
+		}
 		}
 		std::cout << (GetTickCount() - t1) << std::endl;
 	}
@@ -458,16 +470,13 @@ int main2(int argc, char* argv[]) {
 
 
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
-	/*
-		int64_t dirtySectorCount = 0;
-		for (size_t idx = 0; idx < srcDiff.size; idx++)
-			if (srcDiff.get(idx)) {
-				dirtySectorCount++;
-				if (action == DdAction::List)
-					std::cout << idx << std::endl;
-			}
-		std::cout << "Dirty sector count: " << dirtySectorCount << std::endl;
-	*/
+		int64_t candidateClusterCount = 0;
+		for (auto& run : srcDiff) {
+			candidateClusterCount +=run.length;
+			if (action == DdAction::List)
+				std::cout << run.offset << "-" << run.offset+run.length << std::endl;
+		}
+		std::cout << "Candidate cluster count: " << candidateClusterCount << std::endl;
 	}
 
 	// Cleanup

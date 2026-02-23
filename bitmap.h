@@ -65,12 +65,14 @@ public:
 	};
 
 
-	Bitmap* bmp = nullptr;
-	BitmapSpans(Bitmap* bmp) : bmp(bmp) {}
+	const uint64_t* ptr;
+	size_t size = 0;
+	BitmapSpans(Bitmap* bmp) : ptr(bmp->data), size(bmp->size) {}
+	BitmapSpans(const uint64_t* ptr, size_t size) : ptr(ptr), size(size) {}
 
 	inline Iterator begin() {
 		// We must ensure we start at the first '1' bit
-		Iterator it(bmp->data, bmp->size);
+		Iterator it(ptr, size);
 		it.findFirst();
 		return it;
 
