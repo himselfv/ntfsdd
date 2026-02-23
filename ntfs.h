@@ -167,3 +167,143 @@ typedef struct _ATTRIBUTE_RECORD_HEADER {
 //
 
 #define NTFS_MAX_ATTR_NAME_LEN           (255)
+
+
+typedef struct _DUPLICATED_INFORMATION {
+
+	//
+	//  File creation time.
+	//
+
+	LONGLONG CreationTime;                                          //  offset = 0x000
+
+																	//
+																	//  Last time the DATA attribute was modified.
+																	//
+
+	LONGLONG LastModificationTime;                                  //  offset = 0x008
+
+																	//
+																	//  Last time any attribute was modified.
+																	//
+
+	LONGLONG LastChangeTime;                                        //  offset = 0x010
+
+																	//
+																	//  Last time the file was accessed.  This field may not always
+																	//  be updated (write-protected media), and even when it is
+																	//  updated, it may only be updated if the time would change by
+																	//  a certain delta.  It is meant to tell someone approximately
+																	//  when the file was last accessed, for purposes of possible
+																	//  file migration.
+																	//
+
+	LONGLONG LastAccessTime;                                        //  offset = 0x018
+
+																	//
+																	//  Allocated Length of the file in bytes.  This is obviously
+																	//  an even multiple of the cluster size.  (Not present if
+																	//  LowestVcn != 0.)
+																	//
+
+	LONGLONG AllocatedLength;                                       //  offset = 0x020
+
+																	//
+																	//  File Size in bytes (highest byte which may be read + 1).
+																	//  (Not present if LowestVcn != 0.)
+																	//
+
+	LONGLONG FileSize;                                              //  offset = 0x028
+
+																	//
+																	//  File attributes.  The first byte is the standard "Fat"
+																	//  flags for this file.
+																	//
+
+	ULONG FileAttributes;                                           //  offset = 0x030
+
+																	//
+																	//  The size of buffer needed to pack these Ea's
+																	//
+
+	USHORT PackedEaSize;                                            //  offset = 0x034
+
+																	//
+																	//  Reserved for quad word alignment
+																	//
+
+	USHORT Reserved;                                                //  offset = 0x036
+
+} DUPLICATED_INFORMATION;                                           //  sizeof = 0x038
+typedef DUPLICATED_INFORMATION *PDUPLICATED_INFORMATION;
+
+//
+//  File Name attribute.  A file has one File Name attribute for
+//  every directory it is entered into (hard links).
+//
+
+typedef struct _FILE_NAME {
+	//
+	//  This is a File Reference to the directory file which indexes
+	//  to this name.
+	//
+	FILE_REFERENCE ParentDirectory;                                 //  offset = 0x000
+	DUPLICATED_INFORMATION Info;                                    //  offset = 0x008
+
+																	//
+																	//  Length of the name to follow, in (Unicode) characters.
+																	//
+
+	UCHAR FileNameLength;                                           //  offset = 0x040
+
+																	//
+																	//  FILE_NAME_xxx flags
+																	//
+
+	UCHAR Flags;                                                    //  offset = 0x041
+
+																	//
+																	//  First character of Unicode File Name
+																	//
+
+	WCHAR FileName[1];                                              //  offset = 0x042
+
+} FILE_NAME;
+typedef FILE_NAME *PFILE_NAME;
+
+//
+//  File Name flags
+//
+
+#define FILE_NAME_NTFS                   (0x01)
+#define FILE_NAME_DOS                    (0x02)
+
+//
+//  The maximum file name length is 255 (in chars)
+//
+
+#define NTFS_MAX_FILE_NAME_LENGTH       (255)
+
+//
+//  The maximum number of links on a file is 1024
+//
+
+#define NTFS_MAX_LINK_COUNT             (1024)
+
+//
+//  This flag is not part of the disk structure, but is defined here
+//  to explain its use and avoid possible future collisions.  For
+//  enumerations of "directories" this bit may be set to convey to
+//  the collating routine that it should not match file names that
+//  only have the FILE_NAME_DOS bit set.
+//
+
+#define FILE_NAME_IGNORE_DOS_ONLY        (0x80)
+
+#define NtfsFileNameSizeFromLength(LEN) (                   \
+    (sizeof( FILE_NAME) + LEN - 2)                          \
+)
+
+#define NtfsFileNameSize(PFN) (                             \
+    (sizeof( FILE_NAME ) + ((PFN)->FileNameLength - 1) * 2) \
+)

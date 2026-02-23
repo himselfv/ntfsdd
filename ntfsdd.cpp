@@ -196,15 +196,18 @@ std::map could keep us sorted, but we don't really need sorted.
 We're going to make this a little bit compatible with Bitmap, but do not expect us to handle overlapping ClusterRuns.
 These do not normally occur in our tasks.
 */
-class CandidateClusterMap : public std::vector<ClusterRun> {
+class ClusterRunList : public std::vector<ClusterRun> {
 public:
-	CandidateClusterMap() {
+	ClusterRunList() {
 		//Reserve a lot of space for efficiency
 		this->reserve(8192);
 	}
 	inline void set(const LCN offset, const LCN length) { this->emplace_back(offset, length); }
 	inline void set(const ClusterRun& run) { this->push_back(run); }
 };
+
+//typedef ClusterRunList CandidateClusterMap;
+typedef BitmapBuf CandidateClusterMap;
 
 typedef std::vector<ClusterRun> RunList;
 
@@ -237,7 +240,9 @@ struct FileEntry {
 };
 
 struct DiffStats {
+	SegmentNumber usedSegments = 0;
 	SegmentNumber dirtySegments = 0;
+	SegmentNumber multiSegments = 0;
 };
 
 void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClusterMap& srcDiff, DiffStats* stats)
@@ -265,7 +270,13 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 
 	srcUsed.resize(TotalClusters);
 	srcUsed.clear_all();
-	srcDiff.clear();
+	srcDiff.resize(TotalClusters);
+	srcDiff.clear_all();
+//	srcDiff.clear();
+
+	std::vector<wchar_t> filenameBuf;
+	using convert_type = std::codecvt_utf8<wchar_t>;
+	std::wstring_convert<convert_type, wchar_t> converter;
 
 	std::cout << "Reading MFT segments..." << std::endl;
 	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
@@ -288,6 +299,10 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 				dirty = true;
 		}
 
+		//Always mark the MFT itself as dirty. We must always check it, and its own entry doesn't always reflect changes.
+		if (idx == 0)
+			dirty = true;
+
 		//Невалидные слева сегменты пропускаем
 		//Даже если когда-то они ссылались на какие-то кластеры, всё это сводится к ситуации "кластеры больше не используются",
 		//которая решается однократным выкидыванием всех вновь занулённых кластеров по сравнению двух битмапов.
@@ -296,9 +311,21 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 		if (!mftSrc.isValidSegment(&*srcIt)) continue;
 		if (((*srcIt).Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
 
+		if (stats)
+			stats->usedSegments++;
+
 		//Если итератор справа есть, то сравниваем кластеры.
-		if (!dirty)
+		if (!dirty) {
+			/*
+			Very often, the update sequence number will increase without anything else changing at all, to the files not touched in ages.
+			I have no idea why this happens. None of the ideas suggested by me or Gemini makes sense.
+			Probably will have to parse $UsnJrnl to find this out. Anyway, zero out this USHORT to avoid these false matches.
+			NOTE: We still want to copy the updated MFT entry with the new magic number just in case! But not the clusters with the data for this file.
+			*/
+			*((USHORT*)((char*)srcIt.segment + srcIt.segment->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
+			*((USHORT*)((char*)destIt.segment + destIt.segment->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
 			dirty = (0 != memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
+		}
 		if (dirty && stats)
 			stats->dirtySegments++;
 
@@ -323,18 +350,42 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 		if (baseSegmentNumber != 0) {
 			multiSegmentEntry = &filemap[baseSegmentNumber];
 			if (dirty) multiSegmentEntry->dirty = true;
+			if (stats) stats->multiSegments++;
 		}
 
 		//Перебираем атрибуты.
+		std::string filename {};
+		bool filenameNtfs = false;
+		LCN totalFileClusters = 0;
 		for (auto& attr : AttributeIterator(&(*srcIt))) {
+			if (attr.TypeCode == $FILE_NAME && dirty) {
+				assert(attr.FormCode != NONRESIDENT_FORM);
+				FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
+				if (fndata->Flags & FILE_NAME_NTFS || !filenameNtfs) {
+					if (filenameBuf.size() < fndata->FileNameLength + 2)
+						filenameBuf.resize(fndata->FileNameLength + 2);
+					memcpy(filenameBuf.data(), fndata->FileName, fndata->FileNameLength * 2);
+					filenameBuf[fndata->FileNameLength] = 0x00;
+					filename = converter.to_bytes((wchar_t*)(filenameBuf.data()));
+					if (fndata->Flags & FILE_NAME_NTFS) filenameNtfs = true;
+				}
+			}
 			if (attr.FormCode != NONRESIDENT_FORM) continue;
 			for (auto& run : DataRunIterator(&attr)) {
 				srcUsed.set(run.offset, run.offset + run.length - 1);
+				totalFileClusters += run.length;
 				if (multiSegmentEntry != nullptr)
 					multiSegmentEntry->runList.push_back(run);
 				else if (dirty)
 					srcDiff.set(run);
 			}
+		}
+
+		//Выводим информацию об изменившихся файлах, если нас попросили
+		if (dirty) {
+			if (filename.empty())
+				filename = std::string{ "#" }+std::to_string(idx);
+			std::cout << "Dirty: " << filename << " clusters=" << totalFileClusters << std::endl;
 		}
 	}
 
@@ -442,16 +493,18 @@ int main2(int argc, char* argv[]) {
 		auto t1 = GetTickCount();
 		switch (mode) {
 		case DdMode::All:
-			srcDiff.emplace_back(0, src.volumeData().TotalClusters.QuadPart);
+			srcDiff.set(ClusterRun{ 0, src.volumeData().TotalClusters.QuadPart });
 			break;
 		case DdMode::Bitmap:
 			for (auto& run : BitmapSpans((uint64_t*)srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart))
-				srcDiff.push_back(run);
+				srcDiff.set(run);
 			break;
 		case DdMode::MFT: {
 			DiffStats stats;
 			fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff, &stats);
+			std::cout << "Used segments: " << stats.usedSegments << std::endl;
 			std::cout << "Dirty segments: " << stats.dirtySegments << std::endl;
+			std::cout << "Multisegments: " << stats.multiSegments << std::endl;
 			break;
 		}
 		}
@@ -471,7 +524,7 @@ int main2(int argc, char* argv[]) {
 
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
 		int64_t candidateClusterCount = 0;
-		for (auto& run : srcDiff) {
+		for (auto& run : BitmapSpans(&srcDiff)) {
 			candidateClusterCount +=run.length;
 			if (action == DdAction::List)
 				std::cout << run.offset << "-" << run.offset+run.length << std::endl;

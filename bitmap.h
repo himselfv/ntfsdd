@@ -12,6 +12,7 @@ public:
 	Bitmap(void* data) : data(static_cast<uint64_t*>(data)) {};
 	inline bool get(size_t idx) { return 0 != (((uint8_t*)data)[idx / 8] & (1 << (idx % 8))); }
 	void set(size_t lo, size_t hi);
+	inline void set(const ClusterRun& run) { this->set(run.offset, run.offset + run.length - 1);  }
 	void clear(size_t lo, size_t hi);
 	void clear_all();
 };
