@@ -23,6 +23,8 @@ $Data VCN0=101, VCN1=200, Runs=301-320,521-600
 16: 116
 101: 301
 121: 521
+
+ATTRIBUTE_FLAG_SPARSE и встречающиеся в нём sparse runs сейчас не поддерживаем, хотя в принципе это несложно.
 */
 struct VcnMapEntry {
 	VCN vcnStart = 0;

@@ -26,7 +26,7 @@ void NonResidentData::addAttr(ATTRIBUTE_RECORD_HEADER* attr) {
 		this->dataHeader = *attr;
 	}
 	VCN vcnpos = attr->Form.Nonresident.LowestVcn;
-	for (auto& run : DataRunIterator(attr)) {
+	for (auto& run : DataRunIterator(attr, DRI_SKIP_SPARSE)) {
 		m_vcnMap.push_back(VcnMapEntry{ vcnpos, run.offset, run.length });
 		vcnpos += run.length;
 	}
@@ -89,7 +89,7 @@ void Mft::loadMftStructure(LCN lcnFirst)
 		if (attr.FormCode == RESIDENT_FORM)
 			std::cerr << "  Resident: " << attr.Form.Resident.ValueLength << std::endl;
 		else
-			for (auto& run : DataRunIterator(&attr))
+			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE))
 				std::cerr << "  Run: " << run.offset << ":" << run.length << std::endl;
 		assert(attr.TypeCode != $ATTRIBUTE_LIST); //Не поддерживаем $ATTRIBUTE_LIST в MFT!
 	}

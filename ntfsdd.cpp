@@ -171,7 +171,7 @@ void rebuildVolumeBitmap(Volume& vol, Mft& mft, BitmapBuf* bmp)
 		if ((segment.Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
 		for (auto& attr : AttributeIterator(&segment)) {
 			if (attr.FormCode != NONRESIDENT_FORM) continue;
-			for (auto& run : DataRunIterator(&attr))
+			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE))
 				bmp->set(run.offset, run.offset + run.length - 1);
 		}
 		if (idx % 1000 == 0) std::cerr << idx << " / " << totalSegments << std::endl;
@@ -245,7 +245,11 @@ struct DiffStats {
 	SegmentNumber multiSegments = 0;
 };
 
-void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClusterMap& srcDiff, DiffStats* stats)
+struct DiffOptions {
+	bool printDirtyFiles = false;
+};
+
+void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClusterMap& srcDiff, DiffStats* stats, const DiffOptions& options)
 {
 	std::unordered_map<int64_t, FileEntry> filemap;
 
@@ -358,7 +362,7 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 		bool filenameNtfs = false;
 		LCN totalFileClusters = 0;
 		for (auto& attr : AttributeIterator(&(*srcIt))) {
-			if (attr.TypeCode == $FILE_NAME && dirty) {
+			if (attr.TypeCode == $FILE_NAME && dirty && options.printDirtyFiles) {
 				assert(attr.FormCode != NONRESIDENT_FORM);
 				FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
 				if (fndata->Flags & FILE_NAME_NTFS || !filenameNtfs) {
@@ -371,7 +375,9 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 				}
 			}
 			if (attr.FormCode != NONRESIDENT_FORM) continue;
-			for (auto& run : DataRunIterator(&attr)) {
+			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE)) {
+				//assert(run.offset >= 0 || (attr.Flags & ATTRIBUTE_FLAG_SPARSE)); //Sparse runs are supposed to only appear in sparse attributes!
+				//But no, $BadClus:$Bad has sparse runs even without this flag.
 				srcUsed.set(run.offset, run.offset + run.length - 1);
 				totalFileClusters += run.length;
 				if (multiSegmentEntry != nullptr)
@@ -382,7 +388,7 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 		}
 
 		//Выводим информацию об изменившихся файлах, если нас попросили
-		if (dirty) {
+		if (dirty && options.printDirtyFiles) {
 			if (filename.empty())
 				filename = std::string{ "#" }+std::to_string(idx);
 			std::cout << "Dirty: " << filename << " clusters=" << totalFileClusters << std::endl;
@@ -406,6 +412,7 @@ int main2(int argc, char* argv[]) {
 	DdMode mode{ DdMode::MFT };
 	DdTrim trim{ (DdTrim)(-1) };
 	bool bSafetyOverride = false;
+	bool bPrintDirtyFiles = false;
 
 	app.add_option("source", srcPath, "Source device/file")->required();
 	app.add_option("target", destPath, "Target device/file")->required();
@@ -432,6 +439,11 @@ int main2(int argc, char* argv[]) {
 	app.add_flag("--safety-override", bSafetyOverride, "Continue even if the destination does not seem like the clone of the source")
 		->capture_default_str()
 		;
+
+	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "Print details on the MFT segments that are deemed dirty.")
+		->capture_default_str()
+		;
+
 
 	CLI11_PARSE(app, argc, argv);
 
@@ -501,7 +513,9 @@ int main2(int argc, char* argv[]) {
 			break;
 		case DdMode::MFT: {
 			DiffStats stats;
-			fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff, &stats);
+			DiffOptions options;
+			options.printDirtyFiles = bPrintDirtyFiles;
+			fileTableDiff(src.mft, dest.mft, srcUsed, srcDiff, &stats, options);
 			std::cout << "Used segments: " << stats.usedSegments << std::endl;
 			std::cout << "Dirty segments: " << stats.dirtySegments << std::endl;
 			std::cout << "Multisegments: " << stats.multiSegments << std::endl;

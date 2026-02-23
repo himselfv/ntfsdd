@@ -95,13 +95,19 @@ struct ClusterRun {
 	bool operator==(const ClusterRun& other) const { return (offset == other.offset) && (length == other.length); }
 };
 
+
+#define DRI_SKIP_SPARSE	(1UL << 0)
+
 class DataRunIterator {
 public:
 	struct Iterator {
 		uint8_t* ptr = nullptr;
 		ClusterRun run{ 0, 0 };
+		uint32_t flags = 0;
 
-		Iterator(uint8_t* ptr) : ptr(ptr) { this->readCurrent(); }
+		Iterator(uint8_t* ptr, uint32_t flags = 0) : ptr(ptr), flags(flags) {
+			this->readCurrent();
+		}
 
 		// Access the current value
 		ClusterRun& operator*() { return run; }
@@ -111,16 +117,35 @@ public:
 			return ptr != other.ptr;
 		}
 
+		static constexpr uint64_t LCN_SIGN_BIT = (1ULL << (sizeof(LCN) * 8 - 1));
+
 		inline void readCurrent()
 		{
-			if (ptr == nullptr) return;
-			if (*ptr == 0x00) { ptr = nullptr; return; } //To satisfy comparison with end().
-			auto sz = *ptr;
-			ptr++;
-			run.length = ReadUnsignedValue(ptr, sz & 0x0F);
-			ptr += sz & 0x0F;
-			run.offset += ReadSignedValue(ptr, sz >> 4);
-			ptr += (sz >> 4);
+			while (true) {
+				if (ptr == nullptr) return;
+				if (*ptr == 0x00) { ptr = nullptr; return; } //To satisfy comparison with end().
+				auto sz = *ptr;
+				ptr++;
+				run.length = ReadUnsignedValue(ptr, sz & 0x0F);
+				ptr += sz & 0x0F;
+
+				sz >>= 4;
+				// Special case: If the size of the offset value is zero, this indicates a "sparse part"
+				// (zero block of a given length not stored anywhere on the disk).
+				// Indicate this by sign bit in an offset. (Not zero! Zero is a valid offset).
+				if (sz == 0)
+					run.offset |= LCN_SIGN_BIT;
+				else {
+					//De-sparsify offset if the previous run had been sparse
+					run.offset &= ~LCN_SIGN_BIT;
+					run.offset += ReadSignedValue(ptr, sz);
+				}
+				ptr += sz;
+
+				if ((run.offset < 0) && (flags & DRI_SKIP_SPARSE))
+					continue;
+				break;
+			}
 		}
 
 		// Advance the generator
@@ -131,10 +156,11 @@ public:
 	};
 
 	ATTRIBUTE_RECORD_HEADER* attr = nullptr;
+	uint32_t flags = 0;
 
-	DataRunIterator(ATTRIBUTE_RECORD_HEADER* attr) : attr(attr) {}
+	DataRunIterator(ATTRIBUTE_RECORD_HEADER* attr, uint32_t flags = 0) : attr(attr), flags(flags) {}
 
-	Iterator begin() { return{ (uint8_t*)attr + attr->Form.Nonresident.MappingPairsOffset }; }
-	Iterator end() { return{ nullptr }; }
+	Iterator begin() { return{ (uint8_t*)attr + attr->Form.Nonresident.MappingPairsOffset, flags }; }
+	Iterator end() { return{ nullptr, 0 }; }
 };
 

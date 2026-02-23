@@ -29,7 +29,7 @@ typedef struct _MULTI_SECTOR_HEADER {
 //This structure definition is valid only for major version 3 and minor version 0 or 1, as reported by FSCTL_GET_NTFS_VOLUME_DATA.
 typedef struct _FILE_RECORD_SEGMENT_HEADER {
   MULTI_SECTOR_HEADER   MultiSectorHeader;
-  LSN					Lsn;
+  LSN					Lsn;						// Log File Sequence Number
   USHORT                SequenceNumber;
   USHORT				ReferenceCount;
   USHORT                FirstAttributeOffset;
