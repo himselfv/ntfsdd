@@ -26,3 +26,41 @@ TEST_CASE("Bitmap to spans", "[Bitmap]") {
 	for (size_t i = 0; i < decoded.size(); i++)
 		CHECK(src[i] == decoded[i]);
 }
+
+TEST_CASE("Bitmap ops", "[Bitmap]") {
+	BitmapBuf bmp1;
+	bmp1.resize(4096);
+	bmp1.clear_all();
+
+	CHECK(bmp1.isZero());
+
+	BitmapBuf bmp2;
+	bmp2.resize(4096);
+	bmp2.clear_all();
+
+	CHECK(bmp2.isZero());
+
+	bmp1.set(8, 15);
+	bmp2.set(16, 31);
+	bmp1.set(32, 63);
+	bmp2.set(32, 63);
+
+	CHECK(!bmp1.isZero());
+	CHECK(!bmp2.isZero());
+	CHECK(bmp1.bitCount() == 40);
+	CHECK(bmp2.bitCount() == 48);
+
+	auto and_not = bmp1.andNot(bmp2);
+	auto xor = bmp1 ^ bmp2;
+
+	CHECK(and_not.get(9));
+	CHECK(!and_not.get(17));
+	CHECK(!and_not.get(33));
+
+	CHECK(and_not.bitCount()==8);
+
+	CHECK(xor.get(9));
+	CHECK(xor.get(17));
+	CHECK(!xor.get(33));
+	CHECK(xor.bitCount() == 24);
+}

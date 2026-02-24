@@ -3,6 +3,7 @@
 #include "ntfs.h"
 #include "ntfsutil.h"
 #include "ntfsvolume.h"
+#include "bitmap.h"
 
 
 //Volume-relative byte number
@@ -96,6 +97,7 @@ public:
 	inline LCN totalClusters() { return buf->BitmapSize.QuadPart; }
 	NtfsBitmapFile(Volume* vol, Mft* mft);
 	~NtfsBitmapFile();
+	Bitmap asBitmap() { return Bitmap(buf->Buffer, buf->BitmapSize.QuadPart); }
 };
 
 
@@ -108,7 +110,7 @@ public:
 
 #define SEGMENTITERATOR_BATCHSIZE 16
 //Read this number of clusters/disk sectors/segments, whichever is larger.
-//After 16-32x 4Kb the gains are marginal.
+//After 16-32x 512b the gains are marginal.
 
 //#define SEGMENTITERATOR_TRACKPOS
 //Track additional counters while iterating. Sometimes useful for debugging.

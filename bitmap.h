@@ -2,6 +2,8 @@
 #include <vector>
 #include "ntfsutil.h"
 
+struct BitmapBuf;
+
 //Bitmap access to an externally-managed data.
 struct Bitmap {
 public:
@@ -9,12 +11,27 @@ public:
 	uint64_t* data = nullptr;
 	size_t size = 0; //Size in bits
 	Bitmap() {};
-	Bitmap(void* data) : data(static_cast<uint64_t*>(data)) {};
-	inline bool get(size_t idx) { return 0 != (((uint8_t*)data)[idx / 8] & (1 << (idx % 8))); }
+	Bitmap(void* data, size_t size) : data(static_cast<uint64_t*>(data)), size(size) {};
+	inline bool get(size_t idx) const { return 0 != (((uint8_t*)data)[idx / 8] & (1 << (idx % 8))); }
 	void set(size_t lo, size_t hi);
 	inline void set(const ClusterRun& run) { this->set(run.offset, run.offset + run.length - 1);  }
 	void clear(size_t lo, size_t hi);
 	void clear_all();
+
+private:
+	template <typename Op64>
+	void apply_operation1(Op64 op64);
+	template <typename Op64>
+	void apply_operation3(const Bitmap& other, Bitmap& result, Op64 op64) const;
+
+public:
+	size_t bitCount() const;
+	bool isZero() const;
+	BitmapBuf andNot(const Bitmap& other) const;
+	void andNot(const Bitmap& other, Bitmap& result) const;
+	BitmapBuf operator^(const Bitmap& other) const;
+
+	void print();
 };
 
 //Automatically managed buffer with bitmap access.

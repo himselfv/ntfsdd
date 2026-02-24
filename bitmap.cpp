@@ -49,6 +49,110 @@ void Bitmap::clear_all() {
 	this->clear(0, size - 1);
 }
 
+
+template <typename Op64>
+void Bitmap::apply_operation1(Op64 op64)
+{
+	uint64_t* srcA = this->data;
+	size_t rem = this->size;
+	while (rem > sizeof(*srcA) * 8) {
+		if (!op64(srcA)) break;
+		rem -= sizeof(*srcA) * 8;
+		srcA++;
+	}
+	if (rem > 0) {
+		uint64_t tmpA = *srcA & ~(~0ULL << rem);
+		uint64_t tmpA2 = tmpA;
+		op64(&tmpA2);
+		if (tmpA2 != tmpA)
+			*srcA = (*srcA & (~0ULL << rem)) | (tmpA2 & ~(~0ULL << rem));
+	}
+}
+
+template <typename Op64>
+void Bitmap::apply_operation3(const Bitmap& other, Bitmap& result, Op64 op64) const
+{
+	uint64_t* srcA = this->data;
+	uint64_t* srcB = other.data;
+	uint64_t* dest = result.data;
+	size_t rem = this->size;
+	while (rem > sizeof(*dest) * 8) {
+		op64(srcA, srcB, dest);
+		rem -= sizeof(*dest) * 8;
+		srcA++;
+		srcB++;
+		dest++;
+	}
+	if (rem > 0) {
+		uint64_t tmpA = *srcA & ~(~0ULL << rem);
+		uint64_t tmpB = *srcB & ~(~0ULL << rem);
+		uint64_t tmpDest = *dest & ~(~0ULL << rem);
+		uint64_t tmpDest2 = tmpDest;
+		op64(&tmpA, &tmpB, &tmpDest2);
+		if (tmpDest != tmpDest2)
+			*dest = (*dest & (~0ULL << rem)) | (tmpDest2 & ~(~0ULL << rem));
+	}
+}
+
+size_t Bitmap::bitCount() const
+{
+	size_t result = 0;
+	const_cast<Bitmap*>(this)->apply_operation1(
+		[&result](uint64_t* ptr) { result += __popcnt64(*ptr); return true; }
+		);
+	return result;
+}
+
+bool Bitmap::isZero() const
+{
+	bool result = true;
+	const_cast<Bitmap*>(this)->apply_operation1(
+		[&result](uint64_t* ptr) { if (*ptr != 0) { result = false; return false; } return true; }
+	);
+	return result;
+}
+
+BitmapBuf Bitmap::andNot(const Bitmap& other) const
+{
+	assert(this->size == other.size);
+	BitmapBuf result;
+	result.resize(this->size);
+	this->andNot(other, result);
+	return result;
+}
+
+void Bitmap::andNot(const Bitmap& other, Bitmap& result) const
+{
+	this->apply_operation3(
+		other, result,
+		[&result](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA & ~*srcB; }
+		);
+}
+
+BitmapBuf Bitmap::operator^(const Bitmap& other) const
+{
+	assert(this->size == other.size);
+	BitmapBuf result;
+	result.resize(this->size);
+	this->apply_operation3(
+		other, result,
+		[&result](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA ^ *srcB; }
+	);
+	return result;
+}
+
+#include <bitset>
+
+void Bitmap::print()
+{
+	int64_t idx = 0;
+	const_cast<Bitmap*>(this)->apply_operation1(
+		[&idx](uint64_t* ptr) { idx++; std::cout << std::bitset<64>(*ptr) << std::endl; return true; }
+	);
+}
+
+
+
 BitmapBuf::BitmapBuf(size_t size) {
 	this->resize(size);
 }
@@ -56,7 +160,7 @@ BitmapBuf::BitmapBuf(size_t size) {
 void BitmapBuf::resize(size_t size) {
 	buffer.resize((size + 7) / 8);
 	this->data = static_cast<uint64_t*>((void*)(buffer.data()));
-	this->size = buffer.size() * 8;
+	this->size = size;
 }
 
 

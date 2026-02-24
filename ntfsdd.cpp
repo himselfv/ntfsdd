@@ -404,6 +404,25 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 }
 
 
+/*
+Safety: Проверяем, что наша карта кластеров для проверки содержит, как минимум, все те кластеры, которые *добавились* в более новом битмапе.
+*/
+void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const BitmapBuf& newlyUsedClusters)
+{
+	//Поскольку srcDiff это сам по себе Bitmap, то и тут можем обойтись удобной массовой операцией.
+	auto remainder = newlyUsedClusters.andNot(srcDiff);
+	if (!remainder.isZero())
+		throw std::runtime_error("Assertion failed: some of the newly used clusters are not covered by the newly constructed difference map!");
+}
+
+
+
+void runCompare(Volume& src, Volume& dest, CandidateClusterMap& srcDiff)
+{
+	//TODO: Read from two streams
+}
+
+
 int main2(int argc, char* argv[]) {
 	CLI::App app{ "NTFS Rapid Delta dd", "ntfsdd" };
 
@@ -486,6 +505,7 @@ int main2(int argc, char* argv[]) {
 
 	std::cout << "Loading stored bitmap..." << std::endl;
 	NtfsBitmapFile srcBitmap(&src, &src.mft);
+	NtfsBitmapFile destBitmap(&src, &src.mft);
 
 	std::cout << "Verifying MFT layouts..." << std::endl;
 	verifyMftLayout(src, src.mft, srcBitmap.buf);
@@ -530,11 +550,15 @@ int main2(int argc, char* argv[]) {
 	if (srcUsed.size > 0) {
 		//Убеждаемся, что srcUsed действительно закрывает то же, что говорит $Bitmap.
 		std::cout << "Verifying file table bitmap..." << std::endl;
-		auto diff = compareBitmaps(srcBitmap.buf, &srcUsed);
-		if (diff >= 0)
-			throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
+		auto diff = Bitmap(srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart) ^ srcUsed;
+		//auto diff = compareBitmaps(srcBitmap.buf, &srcUsed);
+		//if (diff >= 0)
+		//	throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
+		if (!diff.isZero()) {
+			diff.print();
+			throw std::runtime_error("Calculated and stored bitmaps are different!");
+		}
 	}
-
 
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
 		int64_t candidateClusterCount = 0;
@@ -544,7 +568,15 @@ int main2(int argc, char* argv[]) {
 				std::cout << run.offset << "-" << run.offset+run.length << std::endl;
 		}
 		std::cout << "Candidate cluster count: " << candidateClusterCount << std::endl;
+
+		//Safety: Проверяем, что наш получившийся список содержит все кластеры srcBitmap, уникальные для него (т.е. перешедшие в состояние 1 с момента destBitmap)
+		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
+
+		runCompare(src, dest, srcDiff);
 	}
+
+
+
 
 	// Cleanup
 	std::cout << "Done.\n";
