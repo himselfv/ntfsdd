@@ -7,12 +7,26 @@
 #include "ntfsutil.h"
 
 
+class Volume;
+
 class VolumeLock {
 protected:
-	HANDLE m_hVolume = INVALID_HANDLE_VALUE;
+	Volume* volume;
 public:
-	VolumeLock(HANDLE hVolume);
+	VolumeLock(Volume& volume);
 	~VolumeLock();
+};
+
+
+struct OverlappedWithEvent {
+public:
+	OVERLAPPED ol{ 0 };
+	OverlappedWithEvent() {
+		ol.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	}
+	~OverlappedWithEvent() {
+		CloseHandle(ol.hEvent);
+	}
 };
 
 
@@ -27,6 +41,7 @@ class Volume {
 protected:
 	std::string m_path{};
 	HANDLE m_h = INVALID_HANDLE_VALUE;
+	OverlappedWithEvent m_overlapped;
 	CombinedVolumeData m_volumeData;
 public:
 	inline HANDLE h() { return this->m_h; }
@@ -38,6 +53,28 @@ public:
 
 	virtual void open(const std::string& path, DWORD dwOpenMode);
 	virtual void close();
+	BOOL ioctl(_In_ DWORD dwIoControlCode,
+		_In_reads_bytes_opt_(nInBufferSize) LPVOID lpInBuffer,
+		_In_ DWORD nInBufferSize,
+		_Out_writes_bytes_to_opt_(nOutBufferSize, *lpBytesReturned) LPVOID lpOutBuffer,
+		_In_ DWORD nOutBufferSize,
+		_Out_opt_ LPDWORD lpBytesReturned,
+		_Inout_opt_ LPOVERLAPPED lpOverlapped
+	);
+	BOOL setFilePointer(
+		_In_ LARGE_INTEGER liDistanceToMove
+	);
+	BOOL read(
+		_Out_writes_bytes_to_opt_(nNumberOfBytesToRead, *lpNumberOfBytesRead) __out_data_source(FILE) LPVOID lpBuffer,
+		_In_ DWORD nNumberOfBytesToRead,
+		_Out_opt_ LPDWORD lpNumberOfBytesRead,
+		_Inout_opt_ LPOVERLAPPED lpOverlapped
+	);
+	BOOL getOverlappedResult(
+		_In_ LPOVERLAPPED lpOverlapped,
+		_Out_ LPDWORD lpNumberOfBytesTransferred,
+		_In_ BOOL bWait
+	);
 
 	void verifyNtfsVersion();
 

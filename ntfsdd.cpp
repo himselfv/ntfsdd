@@ -424,10 +424,79 @@ void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const BitmapBuf
 }
 
 
-
 void runCompare(Volume& src, Volume& dest, CandidateClusterMap& srcDiff)
 {
-	//TODO: Read from two streams
+	//Comparison unit length.
+	//Must be a multiple of logical sector size. Read batches must be a multiple of this.
+
+	//Ideally this is physical sector size, except SSDs lie and emulate 512b where they have 4096b, so in this case we want 4096.
+	//TODO: Allow the user to override and give us True Physical Sector Size.
+	//int64_t COMPARISON_UNIT_SZ = src.extendedVolumeData().BytesPerPhysicalSector;
+	//Well, there's a safer way: work in clusters. It's not ideal if the true sector size is less, but it is also not bad. This is how the OS handles it after all.
+
+	LCN diffCount = 0;
+
+	//Max size of the single chunk for a read operation, in clusters
+	//Bigger spans will be processed in chunks. Too large chunks would hinder parallelization when chunks of wildly different sizes are processed one after another.
+	static constexpr LCN BATCH_LEN = 16;
+	int64_t BATCH_SZ = 16 * src.volumeData().BytesPerCluster;
+
+	std::vector<uint8_t> srcBuf;
+	srcBuf.resize(BATCH_SZ);
+	std::vector<uint8_t> destBuf;
+	destBuf.resize(BATCH_SZ);
+
+	OverlappedWithEvent srcOl;
+	OverlappedWithEvent destOl;
+
+	HANDLE waitHandles[2] = { srcOl.ol.hEvent, destOl.ol.hEvent };
+
+	for (auto& run : BitmapSpans(&srcDiff)) {
+		int64_t offsetBytes = run.offset * src.volumeData().BytesPerCluster;
+		srcOl.ol.Offset = offsetBytes;
+		srcOl.ol.OffsetHigh = offsetBytes >> sizeof(srcOl.ol.Offset) * 8;
+		destOl.ol.Offset = srcOl.ol.Offset;
+		destOl.ol.OffsetHigh = srcOl.ol.OffsetHigh;
+		//Will be auto-incremented with reads
+
+		LCN remainingLen = run.length;
+		while (remainingLen > 0) {
+			LCN len = remainingLen;
+			if (len > BATCH_LEN)
+				len = BATCH_LEN;
+			remainingLen -= len;
+
+			int64_t bytesToRead = len * src.volumeData().BytesPerCluster;
+			OSCHECKBOOL(src.read(srcBuf.data(), bytesToRead, nullptr, &srcOl.ol));
+			OSCHECKBOOL(dest.read(destBuf.data(), bytesToRead, nullptr, &destOl.ol));
+
+			auto res = WaitForMultipleObjects(2, waitHandles, TRUE, INFINITE);
+			if (res < WAIT_OBJECT_0 || res > WAIT_OBJECT_0 + 1)
+				throwLastOsError();
+
+			DWORD bytesRead = 0;
+			OSCHECKBOOL(src.getOverlappedResult(&srcOl.ol, &bytesRead, TRUE));
+			assert(bytesRead == bytesToRead);
+			OSCHECKBOOL(src.getOverlappedResult(&destOl.ol, &bytesRead, TRUE));
+			assert(bytesRead == bytesToRead);
+
+			//Compare these cluster by cluster
+			auto srcPtr = srcBuf.data();
+			auto destPtr = destBuf.data();
+			while (len > 0) {
+				len--;
+				auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
+				if (diff != 0) {
+					diffCount++;
+					//std::cout << "Diff: " << run.offset + run.length - 1 - remainingLen - len << std::endl;
+					//TODO: Add to write queue
+				}
+			}
+
+		}
+	}
+
+	std::cout << "Diff sectors: " << diffCount << std::endl;
 }
 
 
@@ -490,9 +559,9 @@ int main2(int argc, char* argv[]) {
 
 	// 2. Prepare Target (Lock and Dismount)
 	std::cerr << "Locking src..." << std::endl;
-	VolumeLock srcLock(src.h());
+	VolumeLock srcLock(src);
 	std::cerr << "Locking dest..." << std::endl;
-	VolumeLock dstLock(dest.h());
+	VolumeLock dstLock(dest);
 	/*
 	Dismount after locking. Dismounting triggers various activity for 5-8 seconds which prevents locking
 	as system services keep the volume in use.
@@ -502,7 +571,7 @@ int main2(int argc, char* argv[]) {
 	So we're already in a more powerful state.
 	DWORD bytesReturned;
 	std::cerr << "Dismounting dest..." << std::endl;
-	if (!DeviceIoControl(dest.h(), FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
+	if (!dest.ioctl(FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
 		throwLastOsError("FSCTL_DISMOUNT_VOLUME");
 	*/
 

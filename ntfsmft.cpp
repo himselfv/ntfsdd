@@ -43,12 +43,12 @@ void NonResidentData::readAll(void* buf)
 		DWORD bytesRead = 0;
 		LARGE_INTEGER vrbn;
 		vrbn.QuadPart = run.lcnStart*BytesPerCluster;
-		OSCHECKBOOL(SetFilePointerEx(vol->h(), vrbn, nullptr, FILE_BEGIN));
+		OSCHECKBOOL(vol->setFilePointer(vrbn));
 		auto readSz = run.len*BytesPerCluster;
 		auto remSz = this->dataHeader.Form.Nonresident.AllocatedLength - run.vcnStart*BytesPerCluster;
 		if (remSz < readSz)
 			readSz = remSz;
-		OSCHECKBOOL(ReadFile(vol->h(), ptr, (DWORD)readSz, &bytesRead, nullptr));
+		OSCHECKBOOL(vol->read(ptr, (DWORD)readSz, &bytesRead, nullptr));
 		assert(bytesRead == readSz);
 		ptr += bytesRead;
 	}
@@ -144,14 +144,14 @@ void Mft::readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment)
 
 void Mft::readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count)
 {
-	OSCHECKBOOL(SetFilePointerEx(vol->h(), vrbn, nullptr, FILE_BEGIN));
+	OSCHECKBOOL(vol->setFilePointer(vrbn));
 	return readSegmentsNoSeek(segment, count);
 }
 
 void Mft::readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count)
 {
 	DWORD bytesRead = 0;
-	OSCHECKBOOL(ReadFile(vol->h(), segment, count*BytesPerFileSegment, &bytesRead, nullptr));
+	OSCHECKBOOL(vol->read(segment, count*BytesPerFileSegment, &bytesRead, nullptr));
 	assert(bytesRead == count*BytesPerFileSegment);
 
 	while (count > 0) {
@@ -279,7 +279,7 @@ void ExclusiveSegmentIterator::openRun()
 		remainingSegmentsInRun--;
 	} else
 		remainingSegmentsInRun = ((bytesPerCluster * currentRun->len) / mft->BytesPerFileSegment) - 1;
-	OSCHECKBOOL(SetFilePointerEx(mft->vol->h(), vrbn, nullptr, FILE_BEGIN));
+	OSCHECKBOOL(mft->vol->setFilePointer(vrbn));
 #ifdef SEGMENTITERATOR_BATCHREAD
 	assert(remainingBufferData == 0); //just in case
 #endif

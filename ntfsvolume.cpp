@@ -1,24 +1,24 @@
 #pragma once
 #include "ntfsvolume.h"
 
-VolumeLock::VolumeLock(HANDLE hVolume)
+VolumeLock::VolumeLock(Volume& volume)
+	: volume(&volume)
 {
 	DWORD bytesReturned;
-	if (!DeviceIoControl(hVolume, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
+	if (!volume.ioctl(FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
 		throwLastOsError("FSCTL_LOCK_VOLUME");
-	this->m_hVolume = hVolume;
 	std::cerr << "Volume locked." << std::endl;
 }
 
 VolumeLock::~VolumeLock()
 {
 	DWORD bytesReturned = 0;
-	if (this->m_hVolume != INVALID_HANDLE_VALUE) {
-		if (!DeviceIoControl(this->m_hVolume, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
+	if (this->volume && this->volume->h() != INVALID_HANDLE_VALUE) {
+		if (!this->volume->ioctl(FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
 			std::cerr << "WARNING: Cannot unlock volume. Error " << GetLastError() << "." << std::endl; //But ignore
 		else
 			std::cerr << "Volume unlocked." << std::endl;
-		this->m_hVolume = INVALID_HANDLE_VALUE;
+		this->volume = nullptr;
 	}
 }
 
@@ -34,14 +34,13 @@ void Volume::open(const std::string& path, DWORD dwOpenMode)
 	std::cerr << "Opening " << path << "..." << std::endl;
 
 	// Open Handles
-	this->m_h = CreateFileA(path.c_str(), dwOpenMode, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+	this->m_h = CreateFileA(path.c_str(), dwOpenMode, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 	if (this->m_h == INVALID_HANDLE_VALUE)
 		throwLastOsError(std::string{ "Error opening " }+path + std::string{ ". Ensure you're running as Administrator." });
 
 	// Get Volume Geometry (to know cluster size)
 	DWORD bytesReturned;
-	if (!DeviceIoControl(this->m_h, FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, &this->m_volumeData, sizeof(this->m_volumeData), &bytesReturned, NULL))
-		throwLastOsError("FSCTL_GET_NTFS_VOLUME_DATA");
+	this->ioctl(FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, &this->m_volumeData, sizeof(this->m_volumeData), &bytesReturned, NULL);
 	assert(bytesReturned == sizeof(this->m_volumeData));
 
 	verifyNtfsVersion();
@@ -54,6 +53,81 @@ void Volume::close()
 		this->m_h = INVALID_HANDLE_VALUE;
 	}
 }
+
+/*
+Все функции, которые принимают overlapped, будут работать и если его не передать.
+Со внешним overlapped все они возвращают TRUE, если получили ERROR_IO_PENDING, то есть,
+если вы передали свой overlapped, то должны при TRUE всегда делать GetOverlappedResult.
+Это не идеально, если функция выполнилась сразу же, но так проще для вызывающих.
+*/
+
+BOOL Volume::ioctl(_In_ DWORD dwIoControlCode,
+	_In_reads_bytes_opt_(nInBufferSize) LPVOID lpInBuffer,
+	_In_ DWORD nInBufferSize,
+	_Out_writes_bytes_to_opt_(nOutBufferSize, *lpBytesReturned) LPVOID lpOutBuffer,
+	_In_ DWORD nOutBufferSize,
+	_Out_opt_ LPDWORD lpBytesReturned,
+	_Inout_opt_ LPOVERLAPPED lpOverlapped
+)
+{
+	auto overlapped = lpOverlapped;
+	if (overlapped == nullptr)
+		overlapped = &this->m_overlapped.ol;
+
+	if (DeviceIoControl(this->m_h, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, overlapped))
+		return TRUE;
+
+	auto err = GetLastError();
+	if (err != ERROR_IO_PENDING)
+		return FALSE;
+
+	if (lpOverlapped == nullptr)
+		return GetOverlappedResult(this->m_h, overlapped, lpBytesReturned, TRUE);
+	return TRUE;
+}
+
+BOOL Volume::setFilePointer(
+	_In_ LARGE_INTEGER liPointer
+	)
+{
+	this->m_overlapped.ol.Offset = liPointer.LowPart;
+	this->m_overlapped.ol.OffsetHigh = liPointer.HighPart;
+	return TRUE;
+}
+
+BOOL Volume::read(
+	_Out_writes_bytes_to_opt_(nNumberOfBytesToRead, *lpNumberOfBytesRead) __out_data_source(FILE) LPVOID lpBuffer,
+	_In_ DWORD nNumberOfBytesToRead,
+	_Out_opt_ LPDWORD lpNumberOfBytesRead,
+	_Inout_opt_ LPOVERLAPPED lpOverlapped
+)
+{
+	auto overlapped = lpOverlapped;
+	if (overlapped == nullptr)
+		overlapped = &this->m_overlapped.ol;
+
+	if (ReadFile(this->m_h, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, overlapped))
+		return TRUE;
+
+	auto err = GetLastError();
+	if (err != ERROR_IO_PENDING)
+		return FALSE;
+
+	if (lpOverlapped == nullptr)
+		return GetOverlappedResult(this->m_h, overlapped, lpNumberOfBytesRead, TRUE);
+	return TRUE;
+}
+
+BOOL Volume::getOverlappedResult(
+	_In_ LPOVERLAPPED lpOverlapped,
+	_Out_ LPDWORD lpNumberOfBytesTransferred,
+	_In_ BOOL bWait
+)
+{
+	return GetOverlappedResult(this->m_h, lpOverlapped, lpNumberOfBytesTransferred, bWait);
+}
+
+
 
 void Volume::verifyNtfsVersion()
 {
@@ -97,7 +171,7 @@ VOLUME_BITMAP_BUFFER* Volume::queryVolumeBitmap()
 	DWORD err = 0;
 	do {
 		bitmapBuffer = (VOLUME_BITMAP_BUFFER*)realloc(bitmapBuffer, bitmapBufferSize);
-		if (!DeviceIoControl(this->m_h, FSCTL_GET_VOLUME_BITMAP, &startLcn, sizeof(startLcn), bitmapBuffer, bitmapBufferSize, &bytesReturned, NULL))
+		if (!this->ioctl(FSCTL_GET_VOLUME_BITMAP, &startLcn, sizeof(startLcn), bitmapBuffer, bitmapBufferSize, &bytesReturned, NULL))
 			err = GetLastError();
 		else
 			err = 0;
