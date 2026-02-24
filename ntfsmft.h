@@ -105,6 +105,10 @@ public:
 //Exclusive mode: Assume no one else is moving the file pointer in the MFT you're holding.
 //Saves on regular SetFilePointer calls. Less important with large batches.
 
+#define SEGMENTITERATOR_OVERLAPPED
+//Use our own OVERLAPPED when reading. Saves on SetFilePointer calls in synchronous mode
+//and can actually make this overlapped in asynchronous one.
+
 #define SEGMENTITERATOR_BATCHREAD
 //Read data in batches. Hugely speeds up processing.
 
@@ -130,6 +134,10 @@ struct ExclusiveSegmentIterator {
 #ifdef SEGMENTITERATOR_TRACKPOS
 	int64_t lbn = 0;
 	VCN vcn = 0;
+#endif
+
+#ifdef SEGMENTITERATOR_OVERLAPPED
+	Overlapped overlapped;
 #endif
 
 	std::vector<uint8_t> buffer;

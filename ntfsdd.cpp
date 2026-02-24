@@ -435,28 +435,34 @@ void runCompare(Volume& src, Volume& dest, CandidateClusterMap& srcDiff)
 	//Well, there's a safer way: work in clusters. It's not ideal if the true sector size is less, but it is also not bad. This is how the OS handles it after all.
 
 	LCN diffCount = 0;
+	LCN clustersChecked = 0;
+
+	int64_t thisClusterCount = 0;
+	int64_t thisRunCount = 0;
+	auto t1 = GetTickCount();
 
 	//Max size of the single chunk for a read operation, in clusters
 	//Bigger spans will be processed in chunks. Too large chunks would hinder parallelization when chunks of wildly different sizes are processed one after another.
-	static constexpr LCN BATCH_LEN = 16;
-	int64_t BATCH_SZ = 16 * src.volumeData().BytesPerCluster;
+	static constexpr LCN BATCH_LEN = 160;
+	int64_t BATCH_SZ = BATCH_LEN * src.volumeData().BytesPerCluster;
 
 	std::vector<uint8_t> srcBuf;
 	srcBuf.resize(BATCH_SZ);
 	std::vector<uint8_t> destBuf;
 	destBuf.resize(BATCH_SZ);
 
-	OverlappedWithEvent srcOl;
-	OverlappedWithEvent destOl;
+	Overlapped srcOl;
+	Overlapped destOl;
 
-	HANDLE waitHandles[2] = { srcOl.ol.hEvent, destOl.ol.hEvent };
+	HANDLE waitHandles[2] = { srcOl.hEvent, destOl.hEvent };
 
 	for (auto& run : BitmapSpans(&srcDiff)) {
+		thisRunCount++;
 		int64_t offsetBytes = run.offset * src.volumeData().BytesPerCluster;
-		srcOl.ol.Offset = offsetBytes;
-		srcOl.ol.OffsetHigh = offsetBytes >> sizeof(srcOl.ol.Offset) * 8;
-		destOl.ol.Offset = srcOl.ol.Offset;
-		destOl.ol.OffsetHigh = srcOl.ol.OffsetHigh;
+		srcOl.Offset = (DWORD)offsetBytes;
+		srcOl.OffsetHigh = offsetBytes >> sizeof(srcOl.Offset) * 8;
+		destOl.Offset = srcOl.Offset;
+		destOl.OffsetHigh = srcOl.OffsetHigh;
 		//Will be auto-incremented with reads
 
 		LCN remainingLen = run.length;
@@ -467,17 +473,17 @@ void runCompare(Volume& src, Volume& dest, CandidateClusterMap& srcDiff)
 			remainingLen -= len;
 
 			int64_t bytesToRead = len * src.volumeData().BytesPerCluster;
-			OSCHECKBOOL(src.read(srcBuf.data(), bytesToRead, nullptr, &srcOl.ol));
-			OSCHECKBOOL(dest.read(destBuf.data(), bytesToRead, nullptr, &destOl.ol));
+			OSCHECKBOOL(src.read(srcBuf.data(), (DWORD)bytesToRead, nullptr, &srcOl));
+			OSCHECKBOOL(dest.read(destBuf.data(), (DWORD)bytesToRead, nullptr, &destOl));
 
 			auto res = WaitForMultipleObjects(2, waitHandles, TRUE, INFINITE);
 			if (res < WAIT_OBJECT_0 || res > WAIT_OBJECT_0 + 1)
 				throwLastOsError();
 
 			DWORD bytesRead = 0;
-			OSCHECKBOOL(src.getOverlappedResult(&srcOl.ol, &bytesRead, TRUE));
+			OSCHECKBOOL(src.getOverlappedResult(&srcOl, &bytesRead, TRUE));
 			assert(bytesRead == bytesToRead);
-			OSCHECKBOOL(src.getOverlappedResult(&destOl.ol, &bytesRead, TRUE));
+			OSCHECKBOOL(src.getOverlappedResult(&destOl, &bytesRead, TRUE));
 			assert(bytesRead == bytesToRead);
 
 			//Compare these cluster by cluster
@@ -494,6 +500,16 @@ void runCompare(Volume& src, Volume& dest, CandidateClusterMap& srcDiff)
 			}
 
 		}
+
+		if (thisClusterCount > 50000) {
+			auto t2 = GetTickCount() - t1 + 1;
+			clustersChecked += thisClusterCount;
+			std::cout << "Clusters: " << clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount/t2 << ", rpm=" << (double)thisRunCount/t2 << std::endl;
+			thisClusterCount = 0;
+			thisRunCount = 0;
+			t1 = GetTickCount();
+		}
+		thisClusterCount += run.length;
 	}
 
 	std::cout << "Diff sectors: " << diffCount << std::endl;
@@ -593,7 +609,6 @@ int main2(int argc, char* argv[]) {
 	if (action == DdAction::VerifyBitmap) {
 		std::cout << "Recalculating $Bitmap..." << std::endl;
 		auto t1 = GetTickCount();
-
 		rebuildVolumeBitmap(src, src.mft, &srcUsed);
 		std::cout << (GetTickCount() - t1) << std::endl;
 	}
@@ -642,12 +657,14 @@ int main2(int argc, char* argv[]) {
 		std::cout << "Candidate cluster count: " << candidateClusterCount << std::endl;
 
 		//Safety: Проверяем, что наш получившийся список содержит все кластеры srcBitmap, уникальные для него (т.е. перешедшие в состояние 1 с момента destBitmap)
+		auto t1 = GetTickCount();
 		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
+		std::cout << (GetTickCount() - t1) << std::endl;
 
+		t1 = GetTickCount();
 		runCompare(src, dest, srcDiff);
+		std::cout << (GetTickCount() - t1) << std::endl;
 	}
-
-
 
 
 	// Cleanup

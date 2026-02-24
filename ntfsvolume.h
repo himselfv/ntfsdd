@@ -18,14 +18,13 @@ public:
 };
 
 
-struct OverlappedWithEvent {
+struct Overlapped : public OVERLAPPED {
 public:
-	OVERLAPPED ol{ 0 };
-	OverlappedWithEvent() {
-		ol.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	Overlapped() {
+		this->hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	}
-	~OverlappedWithEvent() {
-		CloseHandle(ol.hEvent);
+	~Overlapped() {
+		CloseHandle(this->hEvent);
 	}
 };
 
@@ -41,7 +40,7 @@ class Volume {
 protected:
 	std::string m_path{};
 	HANDLE m_h = INVALID_HANDLE_VALUE;
-	OverlappedWithEvent m_overlapped;
+	Overlapped m_overlapped;
 	CombinedVolumeData m_volumeData;
 public:
 	inline HANDLE h() { return this->m_h; }

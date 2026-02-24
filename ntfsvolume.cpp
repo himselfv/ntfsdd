@@ -72,7 +72,7 @@ BOOL Volume::ioctl(_In_ DWORD dwIoControlCode,
 {
 	auto overlapped = lpOverlapped;
 	if (overlapped == nullptr)
-		overlapped = &this->m_overlapped.ol;
+		overlapped = &this->m_overlapped;
 
 	if (DeviceIoControl(this->m_h, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, overlapped))
 		return TRUE;
@@ -90,8 +90,8 @@ BOOL Volume::setFilePointer(
 	_In_ LARGE_INTEGER liPointer
 	)
 {
-	this->m_overlapped.ol.Offset = liPointer.LowPart;
-	this->m_overlapped.ol.OffsetHigh = liPointer.HighPart;
+	this->m_overlapped.Offset = liPointer.LowPart;
+	this->m_overlapped.OffsetHigh = liPointer.HighPart;
 	return TRUE;
 }
 
@@ -104,7 +104,7 @@ BOOL Volume::read(
 {
 	auto overlapped = lpOverlapped;
 	if (overlapped == nullptr)
-		overlapped = &this->m_overlapped.ol;
+		overlapped = &this->m_overlapped;
 
 	if (ReadFile(this->m_h, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, overlapped))
 		return TRUE;
