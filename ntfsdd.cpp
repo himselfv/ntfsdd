@@ -180,11 +180,19 @@ void rebuildVolumeBitmap(Volume& vol, Mft& mft, BitmapBuf* bmp)
 }
 
 
-LCN compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
+bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 {
 	if (bmp1->StartingLcn.QuadPart % (sizeof(int64_t) * 8) != 0)
 		throw std::runtime_error("StartingLcn is not a multiple of a sufficiently beautiful number, I didn't expect that!");
-	return memcmp(bmp1->Buffer, &bmp2->data[bmp1->StartingLcn.QuadPart / (sizeof(int64_t) * 8)], (bmp1->BitmapSize.QuadPart + 7) / 8);
+	return 0==Bitmap::memcmp(bmp1->Buffer, bmp2->data, bmp1->BitmapSize.QuadPart, 0, bmp1->StartingLcn.QuadPart);
+/*
+	ћедленна€, но более подробна€ верси€
+	auto diff = Bitmap(srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart) ^ srcUsed;
+	auto ret = diff.isZero();
+	if (!ret)
+		diff.print();
+	return ret;
+*/
 }
 
 
@@ -550,14 +558,9 @@ int main2(int argc, char* argv[]) {
 	if (srcUsed.size > 0) {
 		//”беждаемс€, что srcUsed действительно закрывает то же, что говорит $Bitmap.
 		std::cout << "Verifying file table bitmap..." << std::endl;
-		auto diff = Bitmap(srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart) ^ srcUsed;
-		//auto diff = compareBitmaps(srcBitmap.buf, &srcUsed);
-		//if (diff >= 0)
-		//	throw std::runtime_error(std::string{ "A difference in the byte " } +std::to_string(diff) + " of our bitmaps!");
-		if (!diff.isZero()) {
-			diff.print();
-			throw std::runtime_error("Calculated and stored bitmaps are different!");
-		}
+		auto cmp = compareBitmaps(srcBitmap.buf, &srcUsed);
+		if (!cmp)
+			throw std::runtime_error(std::string{ "Manually constructed bitmap is not identical to the NTFS one!" });
 	}
 
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {

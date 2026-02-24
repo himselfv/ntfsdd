@@ -50,10 +50,31 @@ void Bitmap::clear_all() {
 }
 
 
+//Compares two bitmaps handling some edge cases
+int64_t Bitmap::memcmp(const void* bitmap1, const void* bitmap2, size_t bitcnt, size_t offset1, size_t offset2)
+{
+	if (offset1 >= 8) {
+		bitmap1 = (void*)((char*)bitmap1 + (offset1 / 8));
+		offset1 = offset1 % 8;
+	}
+	if (offset2 >= 8) {
+		bitmap2 = (void*)((char*)bitmap2 + (offset2 / 8));
+		offset2 = offset2 % 8;
+	}
+	auto rem = bitcnt % 8;
+	bitcnt = bitcnt / 8;
+	auto ret = std::memcmp(bitmap1, bitmap2, bitcnt);
+	if (ret != 0 || rem == 0) return ret;
+
+	rem = ~(~0ULL << rem);
+	return (((char*)bitmap1)[bitcnt] & rem) - (((char*)bitmap2)[bitcnt] & rem);
+}
+
+
 template <typename Op64>
 void Bitmap::apply_operation1(Op64 op64)
 {
-	uint64_t* srcA = this->data;
+	uint64_t* srcA = this->data;	
 	size_t rem = this->size;
 	while (rem > sizeof(*srcA) * 8) {
 		if (!op64(srcA)) break;

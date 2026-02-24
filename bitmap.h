@@ -18,6 +18,9 @@ public:
 	void clear(size_t lo, size_t hi);
 	void clear_all();
 
+public:
+	static int64_t memcmp(const void* bitmap1, const void* bitmap2, size_t bitcnt, size_t offset1 = 0, size_t offset2 = 0);
+
 private:
 	template <typename Op64>
 	void apply_operation1(Op64 op64);
