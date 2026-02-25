@@ -153,7 +153,12 @@ void Mft::readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPO
 	DWORD bytesRead = 0;
 	OSCHECKBOOL(vol->read(segment, count*BytesPerFileSegment, &bytesRead, nullptr));
 	assert(bytesRead == count*BytesPerFileSegment);
+	this->processSegments(segment, count);
+}
 
+
+void Mft::processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count)
+{
 	while (count > 0) {
 		//So apparently records can be uninitialized. These appear closer to the end of the MFT.
 		bool isValidSegment = (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
@@ -226,6 +231,7 @@ SegmentIteratorBase::SegmentIteratorBase(Mft* mft, Flags flags)
 
 int64_t SegmentIteratorBase::selectMaxChunkSize()
 {
+	if (mft == nullptr) return 4096;
 	//Наш блок на чтение:
 	//- Однозначно кратен сегменту
 	//- Лучше, чтобы кратен кластеру, чтобы проще было решать вопросы чтения
@@ -270,7 +276,7 @@ void SegmentIteratorBase::readCurrent()
 }
 
 
-SegmentIterator::SegmentIterator(Mft* mft, Flags flags)
+SegmentIteratorBuffered::SegmentIteratorBuffered(Mft* mft, Flags flags)
 	: SegmentIteratorBase(mft, flags)
 {
 	if (mft == nullptr) return; //null-initialized end() iterator
@@ -287,7 +293,7 @@ SegmentIterator::SegmentIterator(Mft* mft, Flags flags)
 	}
 }
 
-void SegmentIterator::advanceRun()
+void SegmentIteratorBuffered::advanceRun()
 {
 	if (remainingRuns <= 0) {
 		currentRun = nullptr;
@@ -300,7 +306,7 @@ void SegmentIterator::advanceRun()
 }
 
 //Open currently selected run. It must have at least one segment.
-void SegmentIterator::openRun()
+void SegmentIteratorBuffered::openRun()
 {
 	auto bytesPerCluster = mft->vol->volumeData().BytesPerCluster;
 	vrbn.QuadPart = bytesPerCluster * currentRun->lcnStart;
@@ -316,7 +322,7 @@ void SegmentIterator::openRun()
 	assert(remainingBufferData == 0); //just in case
 }
 
-void SegmentIterator::advance()
+void SegmentIteratorBuffered::advance()
 {
 	if (remainingSegmentsInRun > 0) {
 		remainingSegmentsInRun--;
@@ -336,7 +342,7 @@ void SegmentIterator::advance()
 //Assumes currentRun is valid and there's at least one segment record left in it.
 //Advances segment pointer into the current buffer if there's enough buffered data left, or requests a new chunk of data and points segment into that.
 //On exit we have a valid segment pointer.
-void SegmentIterator::readInt()
+void SegmentIteratorBuffered::readInt()
 {
 	if (remainingBufferData >= mft->BytesPerFileSegment) {
 		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
@@ -364,21 +370,110 @@ void SegmentIterator::readInt()
 
 
 SegmentIteratorOverlapped::SegmentIteratorOverlapped(Mft* mft, Flags flags)
-	: SegmentIteratorBase(mft, flags),
-	reader(mft->vol->h(), SEGMENTITERATOR_QUEUEDEPTH, this->selectMaxChunkSize())
+	: SegmentIteratorBase(mft, flags)
 {
 	if (mft == nullptr) return; //null-initialized end() iterator
+
+	this->reader = new AsyncFileReader(mft->vol->h(), SEGMENTITERATOR_QUEUEDEPTH, this->selectMaxChunkSize());
 
 	remainingRuns = (int)mft->vcnMap().size();
 	if (remainingRuns > 0) {
 		currentRun = mft->vcnMap().data();
 		remainingRuns--;
-//		this->openRun();
+		this->openRun();
 		this->readCurrent();
 	}
 }
 
+SegmentIteratorOverlapped::~SegmentIteratorOverlapped()
+{
+	if (this->reader) {
+		delete this->reader;
+		this->reader = nullptr;
+	}
+}
+
+//TODO: Nothing here handles zero-length runs.
+void SegmentIteratorOverlapped::advanceRun()
+{
+	if (remainingRuns <= 0) {
+		currentRun = nullptr;
+		currentClusterInRun = 0;
+		return;
+	}
+	remainingRuns--;
+	currentRun++;
+	this->openRun();
+}
+
+//Open currently selected run. It must have at least one segment.
+void SegmentIteratorOverlapped::openRun()
+{
+	auto bytesPerCluster = mft->vol->volumeData().BytesPerCluster;
+/*	if (remainingRuns <= 0) {
+		remainingClustersInRun = mft->sizeInBytes() / mft->vol->volumeData().BytesPerCluster;
+		for (size_t i = 0; i<mft->vcnMap().size() - 1; i++)
+			remainingClustersInRun -= mft->vcnMap().at(i).len;
+	}
+	else*/
+		currentClusterInRun = 0;
+}
+
 void SegmentIteratorOverlapped::advance()
 {
-//		while (reader.try_push_back())
+	auto BytesPerCluster = this->mft->vol->volumeData().BytesPerCluster;
+
+	//Часть 1. Запихиваем команды чтения в очередь
+	while (currentRun != nullptr) {
+		auto offset = currentRun->lcnStart + currentClusterInRun;
+		auto len = currentRun->len - currentClusterInRun;
+		if (len > SEGMENTITERATOR_BATCHSIZE)
+			len = SEGMENTITERATOR_BATCHSIZE;
+		if (!this->reader->try_push_back(offset*BytesPerCluster, (uint32_t)(len*BytesPerCluster)))
+			break;
+		currentClusterInRun += len;
+		if (currentClusterInRun >= currentRun->len)
+			this->advanceRun();
+#ifdef SEGMENTITERATOR_TRACKPOS
+		readClustersPushed += len;
+		readsPushed++;
+#endif
+	}
+
+	//Часть 2. Дочитываем до конца текущий буфер.
+	if (remainingBufferData >= mft->BytesPerFileSegment) {
+		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
+		remainingBufferData -= mft->BytesPerFileSegment;
+#ifdef SEGMENTITERATOR_TRACKPOS
+		segmentAdvances++;
+#endif
+		//Не проверяем, что remainingBufferData делится на BytesPerFileSegment без остатка! Это должно быть верно.
+		return;
+	}
+	assert(remainingBufferData == 0);
+
+	//Часть 3. Дожидаемся и вытаскиваем следующий запрос на чтение.
+
+	//Если у нас есть предыдущий буфер, то мы его достали из читалки и должны ей вернуть
+	if (segment != nullptr) {
+#ifdef SEGMENTITERATOR_TRACKPOS
+		readsPopped++;
+#endif
+		reader->pop_front();
+		segment = nullptr;
+	}
+
+	remainingBufferData = 0; //Going to cast it to 32 bit so zero it
+	segment = (FILE_RECORD_SEGMENT_HEADER*)reader->finalize_front((uint32_t*)&remainingBufferData);
+	if (segment == nullptr)
+		return;
+	assert(remainingBufferData % mft->BytesPerFileSegment == 0);
+#ifdef SEGMENTITERATOR_TRACKPOS
+	readsPulled++;
+	readClustersPulled += remainingBufferData / mft->vol->volumeData().BytesPerCluster;
+	readSegmentsPulled += remainingBufferData / mft->BytesPerFileSegment;
+	segmentAdvances++;
+#endif
+	mft->processSegments(segment, (int)(remainingBufferData / mft->BytesPerFileSegment));
+	remainingBufferData -= mft->BytesPerFileSegment; //Read this right now
 }

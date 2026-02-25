@@ -101,6 +101,8 @@ try_push_back() берёт первый свободный OVERLAPPED и инициирует чтение на нём, за
 finalize_front() проверяет, что первый пункт в списке чтений активен и ждёт, пока он закончится. Финализирует его. Выпускает overlapped.
 */
 
+#define AFR_ZEROMEM
+
 struct AsyncSlot {
 	OVERLAPPED ovl;
 	uint8_t* buffer;

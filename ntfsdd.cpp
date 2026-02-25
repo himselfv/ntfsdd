@@ -298,8 +298,6 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 	auto destIter = ExclusiveSegmentIter(&mftDest);
 	auto destIt = destIter.begin();
 
-//	HANDLE waitHandles[2] = { srcIt.overlapped.hEvent, destIt.overlapped.hEvent };
-
 	for (; srcIt != srcIter.end(); ++srcIt) {
 		idx++;
 		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
@@ -324,8 +322,10 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 		//которая решается однократным выкидыванием всех вновь занулённых кластеров по сравнению двух битмапов.
 		//Или ещё лучше, вообще нами не решается, а делается время от времени defrag /Retrim.
 		//Все кластеры самих MFT *будут* скопированы - за это отвечает запись MFT. И поэтому список фактически используемых кластеров *станет* актуальным.
-		if (!mftSrc.isValidSegment(&*srcIt)) continue;
-		if (((*srcIt).Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
+		if (!mftSrc.isValidSegment(&*srcIt)) {
+			continue;
+		}
+		if ((srcIt->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
 
 		if (stats)
 			stats->usedSegments++;

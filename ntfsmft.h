@@ -84,6 +84,7 @@ public:
 	void readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment);
 	void readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count);
 	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPOVERLAPPED lpOverlapped = nullptr);
+	void processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count);
 	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header);
 
 	inline bool isValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
@@ -134,7 +135,6 @@ struct SegmentIteratorBase {
 
 	const VcnMapEntry* currentRun = nullptr;
 	int remainingRuns = 0;
-	VCN remainingSegmentsInRun = 0;
 
 	SegmentIteratorBase(Mft* mft, Flags flags = 0);
 	int64_t selectMaxChunkSize();
@@ -164,17 +164,19 @@ struct SegmentIteratorBase {
 	}
 };
 
-struct SegmentIterator : public SegmentIteratorBase {
+struct SegmentIteratorBuffered : public SegmentIteratorBase {
 	LARGE_INTEGER vrbn;
 #ifdef SEGMENTITERATOR_TRACKPOS
 	int64_t lbn = 0;
 	VCN vcn = 0;
 #endif
 
+	SegmentNumber remainingSegmentsInRun = 0;
+
 	std::vector<uint8_t> buffer;
 	int64_t remainingBufferData = 0;
 
-	SegmentIterator(Mft* mft, Flags flags = 0);
+	SegmentIteratorBuffered(Mft* mft, Flags flags = 0);
 
 	void advanceRun();
 
@@ -189,15 +191,37 @@ struct SegmentIterator : public SegmentIteratorBase {
 
 
 struct SegmentIteratorOverlapped : public SegmentIteratorBase {
-	AsyncFileReader reader;
+	AsyncFileReader* reader = nullptr;
 
 	int64_t remainingBufferData = 0;
 
+#ifdef SEGMENTITERATOR_TRACKPOS
+	int64_t readsPushed = 0;
+	int64_t readsPulled = 0;
+	int64_t readsPopped = 0;
+	int64_t readClustersPushed = 0;
+	int64_t readClustersPulled = 0;
+	int64_t readSegmentsPulled = 0;
+	int64_t segmentAdvances = 0;
+#endif
+
 	SegmentIteratorOverlapped(Mft* mft, Flags flags = 0);
+	~SegmentIteratorOverlapped();
+
+	/*
+	В этом итераторе итерация по кластерам runs (постановка на чтение) и указатель на прочитанные данные независимы.
+	currentRun установлен с самого начала и до исчерпания входных кластеров. После этого он нулевой. До этого он всегда указывает на следующий кластер для чтения.
+	*/
+	int64_t currentClusterInRun = 0;
+	void advanceRun();
+	void openRun();
 
 	virtual void advance() override;
 };
 
+
+//typedef SegmentIteratorBuffered SegmentIterator;
+typedef SegmentIteratorOverlapped SegmentIterator;
 
 
 class ExclusiveSegmentIter {
@@ -207,7 +231,7 @@ public:
 
 	ExclusiveSegmentIter(Mft* mft, SegmentIterator::Flags flags = 0) : mft(mft), flags(flags) {}
 
-	// 3. Begin and End methods for range-based for loop
+	// Begin and End methods for range-based for loop
 	inline SegmentIterator begin() { return{ mft, flags }; }
 	inline SegmentIterator end() { return{ nullptr }; }
 };

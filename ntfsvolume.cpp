@@ -224,6 +224,10 @@ bool AsyncFileReader::try_push_back(uint64_t offset, uint32_t size) {
 	// Reset the event before issuing the read
 	ResetEvent(slot->ovl.hEvent);
 
+#ifdef AFR_ZEROMEM
+	memset(slot->buffer, 0, max_chunk_size);
+#endif
+
 	BOOL result = ReadFile(hFile, slot->buffer, size, NULL, &slot->ovl);
 
 	if (!result && GetLastError() != ERROR_IO_PENDING)
