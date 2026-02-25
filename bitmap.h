@@ -43,6 +43,8 @@ public:
 	std::vector<uint8_t> buffer;
 	BitmapBuf() {}
 	BitmapBuf(size_t size);
+	BitmapBuf(BitmapBuf&& other);
+	BitmapBuf& operator=(BitmapBuf&& other);
 	void resize(size_t size);
 };
 

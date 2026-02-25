@@ -178,6 +178,21 @@ BitmapBuf::BitmapBuf(size_t size) {
 	this->resize(size);
 }
 
+BitmapBuf::BitmapBuf(BitmapBuf&& other)
+{
+	*this = std::move(other);
+}
+
+BitmapBuf& BitmapBuf::operator=(BitmapBuf&& other)
+{
+	this->data = other.data;
+	other.data = nullptr;
+	this->size = other.size;
+	other.size = 0;
+	this->buffer = std::move(other.buffer);
+	return *this;
+}
+
 void BitmapBuf::resize(size_t size) {
 	buffer.resize((size + 7) / 8);
 	this->data = static_cast<uint64_t*>((void*)(buffer.data()));

@@ -413,6 +413,7 @@ int main2(int argc, char* argv[]) {
 			MftDiff diff(src.mft, dest.mft);
 			diff.printDirtyFiles = bPrintDirtyFiles;
 			diff.scan();
+			srcDiff = std::move(diff.srcDiff);
 			std::cout << "Used segments: " << diff.stats.usedSegments << std::endl;
 			std::cout << "Dirty segments: " << diff.stats.dirtySegments << std::endl;
 			std::cout << "Multisegments: " << diff.stats.multiSegments << std::endl;
