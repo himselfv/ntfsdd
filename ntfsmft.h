@@ -83,7 +83,7 @@ public:
 	void readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* segment);
 	void readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment);
 	void readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count);
-	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count);
+	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPOVERLAPPED lpOverlapped = nullptr);
 	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header);
 
 	inline bool isValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
@@ -101,18 +101,8 @@ public:
 };
 
 
-//#define SEGMENTITERATOR_EXCLUSIVE
-//Exclusive mode: Assume no one else is moving the file pointer in the MFT you're holding.
-//Saves on regular SetFilePointer calls. Less important with large batches.
-
-#define SEGMENTITERATOR_OVERLAPPED
-//Use our own OVERLAPPED when reading. Saves on SetFilePointer calls in synchronous mode
-//and can actually make this overlapped in asynchronous one.
-
-#define SEGMENTITERATOR_BATCHREAD
-//Read data in batches. Hugely speeds up processing.
-
 #define SEGMENTITERATOR_BATCHSIZE 16
+//Read data in batches. Hugely speeds up processing.
 //Read this number of clusters/disk sectors/segments, whichever is larger.
 //After 16-32x 512b the gains are marginal.
 
@@ -125,8 +115,24 @@ public:
 /*
 Пытается читать MFT быстрее, экономя на повторных установках FilePointer. Можно использовать одновременно максимум один!
 */
-struct ExclusiveSegmentIterator {
+
+//#define SI_OVERLAPPED	(1UL << 0)
+//Использовать настоящий overlapped! Итератор будет продвигаться, не дожидаясь фактического чтения блока данных.
+//Вы должны дождаться его overlapped.hEvent прежде, чем вытаскивать из него данные!
+
+#define SI_SKIP_INVALID		(1UL << 1)
+//Пропускать сегменты без заголовка FILE
+
+#define SI_SKIP_NOT_IN_USE	(1UL << 2)
+//Пропускать сегменты без флага IN_USE
+
+
+struct SegmentIterator {
+	typedef uint32_t Flags;
+
 	Mft* mft = nullptr;
+	Flags flags = 0;
+
 	const VcnMapEntry* currentRun = nullptr;
 	int remainingRuns = 0;
 	VCN remainingSegmentsInRun = 0;
@@ -136,27 +142,21 @@ struct ExclusiveSegmentIterator {
 	VCN vcn = 0;
 #endif
 
-#ifdef SEGMENTITERATOR_OVERLAPPED
 	Overlapped overlapped;
-#endif
 
 	std::vector<uint8_t> buffer;
-#ifdef SEGMENTITERATOR_BATCHREAD
 	int64_t remainingBufferData = 0;
 	FILE_RECORD_SEGMENT_HEADER* segment = nullptr;
 	// Access the current value
 	inline FILE_RECORD_SEGMENT_HEADER& operator*() { return *segment; }
-#else
-	// Access the current value
-	inline FILE_RECORD_SEGMENT_HEADER& operator*() { return *((FILE_RECORD_SEGMENT_HEADER*)(buffer.data())); }
-#endif
+	inline FILE_RECORD_SEGMENT_HEADER* operator->() { return segment; }
 	void readCurrent();
 
 
-	ExclusiveSegmentIterator(Mft* mft);
+	SegmentIterator(Mft* mft, Flags flags = 0);
 
 	// Comparison for the loop termination
-	inline bool operator!=(const ExclusiveSegmentIterator& other) const {
+	inline bool operator!=(const SegmentIterator& other) const {
 		return (currentRun != other.currentRun) || (remainingSegmentsInRun != other.remainingSegmentsInRun);
 	}
 
@@ -166,7 +166,7 @@ struct ExclusiveSegmentIterator {
 	void openRun();
 
 	// Advance the generator
-	inline ExclusiveSegmentIterator& operator++() {
+	inline SegmentIterator& operator++() {
 		if (remainingSegmentsInRun > 0) {
 			remainingSegmentsInRun--;
 			vrbn.QuadPart += mft->BytesPerFileSegment; //Отслеживаем всегда, т.к. нужно для нескольких механизмов сразу.
@@ -186,10 +186,11 @@ struct ExclusiveSegmentIterator {
 class ExclusiveSegmentIter {
 public:
 	Mft* mft = nullptr;
+	SegmentIterator::Flags flags = 0;
 
-	ExclusiveSegmentIter(Mft* mft) : mft(mft) {}
+	ExclusiveSegmentIter(Mft* mft, SegmentIterator::Flags flags = 0) : mft(mft), flags(flags) {}
 
 	// 3. Begin and End methods for range-based for loop
-	inline ExclusiveSegmentIterator begin() { return{ mft }; }
-	inline ExclusiveSegmentIterator end() { return{ nullptr }; }
+	inline SegmentIterator begin() { return{ mft, flags }; }
+	inline SegmentIterator end() { return{ nullptr }; }
 };

@@ -148,7 +148,7 @@ void Mft::readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int c
 	return readSegmentsNoSeek(segment, count);
 }
 
-void Mft::readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count)
+void Mft::readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPOVERLAPPED lpOverlapped)
 {
 	DWORD bytesRead = 0;
 	OSCHECKBOOL(vol->read(segment, count*BytesPerFileSegment, &bytesRead, nullptr));
@@ -219,11 +219,11 @@ NtfsBitmapFile::~NtfsBitmapFile()
 
 
 
-ExclusiveSegmentIterator::ExclusiveSegmentIterator(Mft* mft)
-	: mft(mft)
+SegmentIterator::SegmentIterator(Mft* mft, Flags flags)
+	: mft(mft), flags(flags)
 {
 	if (mft == nullptr) return; //null-initialized end() iterator
-#ifdef SEGMENTITERATOR_BATCHREAD
+
 	//Наш блок на чтение:
 	//- Однозначно кратен сегменту
 	//- Лучше, чтобы кратен кластеру, чтобы проще было решать вопросы чтения
@@ -242,9 +242,7 @@ ExclusiveSegmentIterator::ExclusiveSegmentIterator(Mft* mft)
 	//Умножаем!
 	batchSize *= SEGMENTITERATOR_BATCHSIZE;
 	buffer.resize(batchSize);
-#else
-	buffer.resize(mft->BytesPerFileSegment);
-#endif
+
 	remainingRuns = (int)mft->vcnMap().size();
 	if (remainingRuns > 0) {
 		currentRun = mft->vcnMap().data();
@@ -254,9 +252,8 @@ ExclusiveSegmentIterator::ExclusiveSegmentIterator(Mft* mft)
 	}
 }
 
-void ExclusiveSegmentIterator::advanceRun()
+void SegmentIterator::advanceRun()
 {
-	std::cout << "advanceRun" << std::endl;
 	if (remainingRuns <= 0) {
 		currentRun = nullptr;
 		remainingSegmentsInRun = 0;
@@ -268,7 +265,7 @@ void ExclusiveSegmentIterator::advanceRun()
 }
 
 //Open currently selected run. It must have at least one segment.
-void ExclusiveSegmentIterator::openRun()
+void SegmentIterator::openRun()
 {
 	auto bytesPerCluster = mft->vol->volumeData().BytesPerCluster;
 	vrbn.QuadPart = bytesPerCluster * currentRun->lcnStart;
@@ -280,46 +277,40 @@ void ExclusiveSegmentIterator::openRun()
 	} else
 		remainingSegmentsInRun = ((bytesPerCluster * currentRun->len) / mft->BytesPerFileSegment) - 1;
 	OSCHECKBOOL(mft->vol->setFilePointer(vrbn));
-#ifdef SEGMENTITERATOR_BATCHREAD
+
 	assert(remainingBufferData == 0); //just in case
-#endif
 }
 
-
-void ExclusiveSegmentIterator::readCurrent()
+void SegmentIterator::readCurrent()
 {
-#ifdef SEGMENTITERATOR_BATCHREAD
-	if (remainingBufferData >= mft->BytesPerFileSegment) {
-		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
-		remainingBufferData -= mft->BytesPerFileSegment;
-		//Не проверяем, что remainingBufferData делится на BytesPerFileSegment без остатка! Это должно быть верно.
-	}
-	else {
-		//Читаем новый участок, в пределах доступного в этом run
-		SegmentNumber segmentCount = (int64_t)(buffer.size()) / mft->BytesPerFileSegment;
-		if (segmentCount > remainingSegmentsInRun+1) //1 уже вычтен перед вызовом этого чтения
-			segmentCount = remainingSegmentsInRun+1;
-		segment = (FILE_RECORD_SEGMENT_HEADER*)(buffer.data());
+	while (true) {
+		if (remainingBufferData >= mft->BytesPerFileSegment) {
+			segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
+			remainingBufferData -= mft->BytesPerFileSegment;
+			//Не проверяем, что remainingBufferData делится на BytesPerFileSegment без остатка! Это должно быть верно.
+		}
+		else {
+			//Читаем новый участок, в пределах доступного в этом run
+			SegmentNumber segmentCount = (int64_t)(buffer.size()) / mft->BytesPerFileSegment;
+			if (segmentCount > remainingSegmentsInRun + 1) //1 уже вычтен перед вызовом этого чтения
+				segmentCount = remainingSegmentsInRun + 1;
+			segment = (FILE_RECORD_SEGMENT_HEADER*)(buffer.data());
 #ifdef SEGMENTITERATOR_ZEROMEM
-		memset(buffer.data(), 0, buffer.size());
+			memset(buffer.data(), 0, buffer.size());
 #endif
-#ifdef SEGMENTITERATOR_EXCLUSIVE
-		mft->readSegmentsNoSeek(segment, (int)segmentCount);
-#else
-		mft->readSegmentsVrbn(vrbn, segment, (int)segmentCount);
-#endif
-		remainingBufferData = (segmentCount - 1)*(mft->BytesPerFileSegment);
-	}
-#else
-#ifdef SEGMENTITERATOR_EXCLUSIVE
-	mft->readSegmentNoSeek((FILE_RECORD_SEGMENT_HEADER*)buffer.data(), 1);
-#else
-	mft->readSegmentVrbn(vrbn, (FILE_RECORD_SEGMENT_HEADER*)buffer.data(), 1);
-#endif
-#endif
+			mft->readSegmentsVrbn(vrbn, segment, (int)segmentCount);
+			remainingBufferData = (segmentCount - 1)*(mft->BytesPerFileSegment);
+		}
 
 #ifdef SEGMENTITERATOR_TRACKPOS
-	lbn += mft->BytesPerFileSegment;
-	vcn++;
+		lbn += mft->BytesPerFileSegment;
+		vcn++;
 #endif
+
+		if ((flags & SI_SKIP_INVALID) && (!mft->isValidSegment(segment)))
+			continue;
+		if ((flags & SI_SKIP_NOT_IN_USE) && ((segment->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0))
+			continue;
+		break;
+	}
 }

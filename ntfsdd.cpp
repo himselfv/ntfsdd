@@ -294,9 +294,13 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
 	SegmentNumber idx = -1;
 	auto srcIter = ExclusiveSegmentIter(&mftSrc);
+	auto srcIt = srcIter.begin();
 	auto destIter = ExclusiveSegmentIter(&mftDest);
 	auto destIt = destIter.begin();
-	for (auto srcIt = srcIter.begin(); srcIt != srcIter.end(); ++srcIt) {
+
+	HANDLE waitHandles[2] = { srcIt.overlapped.hEvent, destIt.overlapped.hEvent };
+
+	for (; srcIt != srcIter.end(); ++srcIt) {
 		idx++;
 		if (idx % 1000 == 0) std::cout << idx << " / " << totalSegments << std::endl;
 
