@@ -145,6 +145,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="bitmap.cpp" />
+    <ClCompile Include="mftdiff.cpp" />
     <ClCompile Include="ntfsmft.cpp" />
     <ClCompile Include="ntfsutil.cpp" />
     <ClCompile Include="ntfsvolume.cpp" />

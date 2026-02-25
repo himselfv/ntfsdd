@@ -224,12 +224,12 @@ struct SegmentIteratorOverlapped : public SegmentIteratorBase {
 typedef SegmentIteratorOverlapped SegmentIterator;
 
 
-class ExclusiveSegmentIter {
+class SegmentIter {
 public:
 	Mft* mft = nullptr;
 	SegmentIterator::Flags flags = 0;
 
-	ExclusiveSegmentIter(Mft* mft, SegmentIterator::Flags flags = 0) : mft(mft), flags(flags) {}
+	SegmentIter(Mft* mft, SegmentIterator::Flags flags = 0) : mft(mft), flags(flags) {}
 
 	// Begin and End methods for range-based for loop
 	inline SegmentIterator begin() { return{ mft, flags }; }
