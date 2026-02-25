@@ -185,3 +185,80 @@ VOLUME_BITMAP_BUFFER* Volume::queryVolumeBitmap()
 	} while (err != 0);
 	return bitmapBuffer;
 }
+
+
+AsyncSlot::AsyncSlot(size_t buffer_size) {
+	ZeroMemory(&ovl, sizeof(OVERLAPPED));
+	ovl.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	buffer = (uint8_t*)_aligned_malloc(buffer_size, 4096);
+	is_pending = false;
+}
+
+AsyncSlot::~AsyncSlot() {
+	CloseHandle(ovl.hEvent);
+	_aligned_free(buffer);
+}
+
+AsyncFileReader::AsyncFileReader(HANDLE file, size_t queue_depth, size_t chunk_size)
+	: hFile(file), max_chunk_size(chunk_size) {
+	for (size_t i = 0; i < queue_depth; ++i) {
+		slots.push_back(new AsyncSlot(max_chunk_size));
+	}
+}
+
+AsyncFileReader::~AsyncFileReader() {
+	for (auto slot : slots) delete slot;
+}
+
+// Try to queue a new read request
+bool AsyncFileReader::try_push_back(uint64_t offset, uint32_t size) {
+	if (pending_count >= slots.size()) return false;
+	if (size > max_chunk_size) return false;
+
+	AsyncSlot* slot = slots[head];
+
+	// Setup OVERLAPPED offset
+	slot->ovl.Offset = (DWORD)(offset & 0xFFFFFFFF);
+	slot->ovl.OffsetHigh = (DWORD)(offset >> 32);
+
+	// Reset the event before issuing the read
+	ResetEvent(slot->ovl.hEvent);
+
+	BOOL result = ReadFile(hFile, slot->buffer, size, NULL, &slot->ovl);
+
+	if (!result && GetLastError() != ERROR_IO_PENDING)
+		throwLastOsError();
+
+	slot->is_pending = true;
+	head = (head + 1) % slots.size();
+	pending_count++;
+	return true;
+}
+
+// Wait for the oldest read and return its buffer
+uint8_t* AsyncFileReader::finalize_front(uint32_t* bytes_read) {
+	if (pending_count == 0) return nullptr;
+
+	AsyncSlot* slot = slots[tail];
+	DWORD transferred = 0;
+
+	// This blocks efficiently if the I/O isn't done.
+	// If it's already done, it returns immediately.
+	BOOL result = GetOverlappedResult(hFile, &slot->ovl, &transferred, TRUE);
+
+	if (result) {
+		if (bytes_read) *bytes_read = transferred;
+		return slot->buffer;
+	}
+
+	return nullptr; // Error occurred
+}
+
+// Release the slot after processing
+void AsyncFileReader::pop_front() {
+	if (pending_count == 0) return;
+
+	slots[tail]->is_pending = false;
+	tail = (tail + 1) % slots.size();
+	pending_count--;
+}

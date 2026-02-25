@@ -298,7 +298,7 @@ void fileTableDiff(Mft& mftSrc, Mft& mftDest, BitmapBuf& srcUsed, CandidateClust
 	auto destIter = ExclusiveSegmentIter(&mftDest);
 	auto destIt = destIter.begin();
 
-	HANDLE waitHandles[2] = { srcIt.overlapped.hEvent, destIt.overlapped.hEvent };
+//	HANDLE waitHandles[2] = { srcIt.overlapped.hEvent, destIt.overlapped.hEvent };
 
 	for (; srcIt != srcIter.end(); ++srcIt) {
 		idx++;
