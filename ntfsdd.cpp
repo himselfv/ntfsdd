@@ -10,8 +10,8 @@
 #include "ntfsmft.h"
 #include "bitmap.h"
 #include "mftdiff.h"
+#include "clusterdiff.h"
 #include <CLI/CLI.hpp>
-
 
 
 
@@ -209,98 +209,6 @@ void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const BitmapBuf
 }
 
 
-void runCompare(Volume& src, Volume& dest, CandidateClusterMap& srcDiff)
-{
-	//Comparison unit length.
-	//Must be a multiple of logical sector size. Read batches must be a multiple of this.
-
-	//Ideally this is physical sector size, except SSDs lie and emulate 512b where they have 4096b, so in this case we want 4096.
-	//TODO: Allow the user to override and give us True Physical Sector Size.
-	//int64_t COMPARISON_UNIT_SZ = src.extendedVolumeData().BytesPerPhysicalSector;
-	//Well, there's a safer way: work in clusters. It's not ideal if the true sector size is less, but it is also not bad. This is how the OS handles it after all.
-
-	LCN diffCount = 0;
-	LCN clustersChecked = 0;
-
-	int64_t thisClusterCount = 0;
-	int64_t thisRunCount = 0;
-	auto t1 = GetTickCount();
-
-	//Max size of the single chunk for a read operation, in clusters
-	//Bigger spans will be processed in chunks. Too large chunks would hinder parallelization when chunks of wildly different sizes are processed one after another.
-	static constexpr LCN BATCH_LEN = 160;
-	int64_t BATCH_SZ = BATCH_LEN * src.volumeData().BytesPerCluster;
-
-	std::vector<uint8_t> srcBuf;
-	srcBuf.resize(BATCH_SZ);
-	std::vector<uint8_t> destBuf;
-	destBuf.resize(BATCH_SZ);
-
-	Overlapped srcOl;
-	Overlapped destOl;
-
-	HANDLE waitHandles[2] = { srcOl.hEvent, destOl.hEvent };
-
-	for (auto& run : BitmapSpans(&srcDiff)) {
-		thisRunCount++;
-		int64_t offsetBytes = run.offset * src.volumeData().BytesPerCluster;
-		srcOl.Offset = (DWORD)offsetBytes;
-		srcOl.OffsetHigh = offsetBytes >> sizeof(srcOl.Offset) * 8;
-		destOl.Offset = srcOl.Offset;
-		destOl.OffsetHigh = srcOl.OffsetHigh;
-		//Will be auto-incremented with reads
-
-		LCN remainingLen = run.length;
-		while (remainingLen > 0) {
-			LCN len = remainingLen;
-			if (len > BATCH_LEN)
-				len = BATCH_LEN;
-			remainingLen -= len;
-
-			int64_t bytesToRead = len * src.volumeData().BytesPerCluster;
-			OSCHECKBOOL(src.read(srcBuf.data(), (DWORD)bytesToRead, nullptr, &srcOl));
-			OSCHECKBOOL(dest.read(destBuf.data(), (DWORD)bytesToRead, nullptr, &destOl));
-
-			auto res = WaitForMultipleObjects(2, waitHandles, TRUE, INFINITE);
-			if (res < WAIT_OBJECT_0 || res > WAIT_OBJECT_0 + 1)
-				throwLastOsError();
-
-			DWORD bytesRead = 0;
-			OSCHECKBOOL(src.getOverlappedResult(&srcOl, &bytesRead, TRUE));
-			assert(bytesRead == bytesToRead);
-			OSCHECKBOOL(src.getOverlappedResult(&destOl, &bytesRead, TRUE));
-			assert(bytesRead == bytesToRead);
-
-			//Compare these cluster by cluster
-			auto srcPtr = srcBuf.data();
-			auto destPtr = destBuf.data();
-			while (len > 0) {
-				len--;
-				auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
-				if (diff != 0) {
-					diffCount++;
-					//std::cout << "Diff: " << run.offset + run.length - 1 - remainingLen - len << std::endl;
-					//TODO: Add to write queue
-				}
-			}
-
-		}
-
-		if (thisClusterCount > 50000) {
-			auto t2 = GetTickCount() - t1 + 1;
-			clustersChecked += thisClusterCount;
-			std::cout << "Clusters: " << clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount/t2 << ", rpm=" << (double)thisRunCount/t2 << std::endl;
-			thisClusterCount = 0;
-			thisRunCount = 0;
-			t1 = GetTickCount();
-		}
-		thisClusterCount += run.length;
-	}
-
-	std::cout << "Diff sectors: " << diffCount << std::endl;
-}
-
-
 int main2(int argc, char* argv[]) {
 	CLI::App app{ "NTFS Rapid Delta dd", "ntfsdd" };
 
@@ -448,9 +356,11 @@ int main2(int argc, char* argv[]) {
 		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
 		std::cout << (GetTickCount() - t1) << std::endl;
 
+		ClusterDiffer cldiff(src, dest);
 		t1 = GetTickCount();
-		runCompare(src, dest, srcDiff);
+		cldiff.process(srcDiff);
 		std::cout << (GetTickCount() - t1) << std::endl;
+		std::cout << "Diff sectors: " << cldiff.stats.diffCount << std::endl;
 	}
 
 
