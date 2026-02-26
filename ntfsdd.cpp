@@ -443,6 +443,7 @@ int main2(int argc, char* argv[]) {
 		std::cout << "Candidate cluster count: " << candidateClusterCount << std::endl;
 
 		//Safety: Проверяем, что наш получившийся список содержит все кластеры srcBitmap, уникальные для него (т.е. перешедшие в состояние 1 с момента destBitmap)
+		//If $Bitmap shows a block was turned from free to used, warn and copy it, as that should not happen if I'm parsing MFT correctly.
 		auto t1 = GetTickCount();
 		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
 		std::cout << (GetTickCount() - t1) << std::endl;
