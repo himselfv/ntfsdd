@@ -356,7 +356,7 @@ int main2(int argc, char* argv[]) {
 		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
 		std::cout << (GetTickCount() - t1) << std::endl;
 
-		ClusterDiffer cldiff(src, dest);
+		ClusterDiffComparer cldiff(src, dest);
 		t1 = GetTickCount();
 		cldiff.process(srcDiff);
 		std::cout << (GetTickCount() - t1) << std::endl;

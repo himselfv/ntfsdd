@@ -4,17 +4,17 @@
 #include "ntfsmft.h"
 
 
-ClusterDiffer::ClusterDiffer(Volume& src, Volume& dest)
+ClusterDiffComparer::ClusterDiffComparer(Volume& src, Volume& dest)
 	: src(src), dest(dest)
 {
 }
 
-ClusterDiffer::~ClusterDiffer()
+ClusterDiffComparer::~ClusterDiffComparer()
 {
 }
 
 
-void ClusterDiffer::process(CandidateClusterMap& srcDiff)
+void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 {
 	//Comparison unit length.
 	//Must be a multiple of logical sector size. Read batches must be a multiple of this.
@@ -44,6 +44,8 @@ void ClusterDiffer::process(CandidateClusterMap& srcDiff)
 
 	for (auto& run : BitmapSpans(&srcDiff)) {
 		stats.runsChecked++;
+
+		LCN lcn = run.offset;
 		int64_t offsetBytes = run.offset * src.volumeData().BytesPerCluster;
 		srcOl.Offset = (DWORD)offsetBytes;
 		srcOl.OffsetHigh = offsetBytes >> sizeof(srcOl.Offset) * 8;
@@ -57,6 +59,8 @@ void ClusterDiffer::process(CandidateClusterMap& srcDiff)
 			if (len > BATCH_LEN)
 				len = BATCH_LEN;
 			remainingLen -= len;
+
+			LCN lastClean = lcn - 1;
 
 			int64_t bytesToRead = len * src.volumeData().BytesPerCluster;
 			OSCHECKBOOL(src.read(srcBuf.data(), (DWORD)bytesToRead, nullptr, &srcOl));
@@ -76,13 +80,23 @@ void ClusterDiffer::process(CandidateClusterMap& srcDiff)
 			auto srcPtr = srcBuf.data();
 			auto destPtr = destBuf.data();
 			while (len > 0) {
-				len--;
 				auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
 				if (diff != 0) {
 					stats.diffCount++;
-					this->onDirty(run.offset+run.length-remainingLen-len);
+					this->onDirty(lcn, srcPtr);
 				}
+				else {
+					if (lastClean != lcn - 1)
+						this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
+					lastClean = lcn;
+				}
+				lcn++;
+				len--;
+				stats.clustersChecked++;
 			}
+			//We do not support "dirty spans" across chunk boundaries so finalize one if we have one
+			if (lastClean != lcn - 1)
+				this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
 		}
 
 		if (stats.clustersChecked - lastProgress > 50000) {
@@ -92,7 +106,7 @@ void ClusterDiffer::process(CandidateClusterMap& srcDiff)
 	}
 }
 
-void ClusterDiffer::onProgress(LCN lcn)
+void ClusterDiffComparer::onProgress(LCN lcn)
 {
 	if (lcn == 0) {
 		this->m_progress_prevStats = this->stats;
@@ -109,8 +123,13 @@ void ClusterDiffer::onProgress(LCN lcn)
 	this->m_progress_prevStats = this->stats;
 }
 
-void ClusterDiffer::onDirty(LCN lcn)
+void ClusterDiffComparer::onDirty(LCN lcn, void* data)
 {
-	//std::cout << "Diff: " << run.offset + run.length - 1 - remainingLen - len << std::endl;
+	//std::cout << "Diff: " << lcn << std::endl;
 	//TODO: Add to write queue
+}
+
+void ClusterDiffComparer::onDirtySpan(LCN lcnFirst, LCN len, void* data)
+{
+	//std::cout << "Span: " << lcnFirst << ":" << len << std::endl;
 }

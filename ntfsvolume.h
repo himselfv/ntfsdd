@@ -106,6 +106,7 @@ finalize_front() провер€ет, что первый пункт в списке чтений активен и ждЄт, пок
 struct AsyncSlot {
 	OVERLAPPED ovl;
 	uint8_t* buffer;
+	size_t bytesUsed;
 	bool is_pending;
 	AsyncSlot(size_t buffer_size);
 	~AsyncSlot();
@@ -133,4 +134,39 @@ public:
 
 	// Release the slot after processing
 	void pop_front();
+};
+
+
+/*
+ќчередь на запись, аналогична€ очереди на чтение.
+
+“олько на этот раз она блокирует сразу в push_back, если свободных слотов нет.
+“ам же она и освобождает завершившиес€.
+
+≈сть отдельна€ функци€ try_finalize_front, котора€ тоже блокирующа€ и возвращает false, если все слоты свободны.
+Ќужна, чтобы доделать задани€, оставшиес€, когда добавл€ть уже больше нечего.
+
+ћожно было бы сделать отдельную бесконечную очередь, куда клиенты бы безблокировочно ставили задани€,
+а она бы тихонько в фоне несколькими или одним работником их писала.
+Ќо всЄ равно пришлось бы ограничивать еЄ длину, чтобы пам€ть не выросла бесконечно.
+*/
+class AsyncFileWriter {
+private:
+	HANDLE hFile;
+	size_t max_chunk_size;
+	std::vector<AsyncSlot*> slots;
+
+	size_t head = 0;
+	size_t tail = 0;
+	size_t pending_count = 0;
+
+public:
+	AsyncFileWriter(HANDLE file, size_t queue_depth, size_t chunk_size);
+	~AsyncFileWriter();
+
+	// Queue a new write request
+	void push_back(uint64_t offset, uint32_t size, void* data);
+
+	// Block until the next queued write completes. False if no queued writes remains.
+	bool try_pop_front(uint32_t* bytes_written);
 };

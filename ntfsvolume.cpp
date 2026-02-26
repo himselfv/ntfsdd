@@ -213,7 +213,7 @@ AsyncFileReader::~AsyncFileReader() {
 // Try to queue a new read request
 bool AsyncFileReader::try_push_back(uint64_t offset, uint32_t size) {
 	if (pending_count >= slots.size()) return false;
-	if (size > max_chunk_size) return false;
+	assert(size <= max_chunk_size);
 
 	AsyncSlot* slot = slots[head];
 
@@ -233,6 +233,7 @@ bool AsyncFileReader::try_push_back(uint64_t offset, uint32_t size) {
 	if (!result && GetLastError() != ERROR_IO_PENDING)
 		throwLastOsError();
 
+	slot->bytesUsed = size;
 	slot->is_pending = true;
 	head = (head + 1) % slots.size();
 	pending_count++;
@@ -249,13 +250,12 @@ uint8_t* AsyncFileReader::finalize_front(uint32_t* bytes_read) {
 	// This blocks efficiently if the I/O isn't done.
 	// If it's already done, it returns immediately.
 	BOOL result = GetOverlappedResult(hFile, &slot->ovl, &transferred, TRUE);
+	if (!result)
+		throwLastOsError();
 
-	if (result) {
-		if (bytes_read) *bytes_read = transferred;
-		return slot->buffer;
-	}
-
-	return nullptr; // Error occurred
+	assert(transferred == slot->bytesUsed);
+	if (bytes_read) *bytes_read = transferred;
+	return slot->buffer;
 }
 
 // Release the slot after processing
@@ -265,4 +265,70 @@ void AsyncFileReader::pop_front() {
 	slots[tail]->is_pending = false;
 	tail = (tail + 1) % slots.size();
 	pending_count--;
+}
+
+
+AsyncFileWriter::AsyncFileWriter(HANDLE file, size_t queue_depth, size_t chunk_size)
+	: hFile(file), max_chunk_size(chunk_size) {
+	for (size_t i = 0; i < queue_depth; ++i) {
+		slots.push_back(new AsyncSlot(max_chunk_size));
+	}
+}
+
+AsyncFileWriter::~AsyncFileWriter() {
+	for (auto slot : slots) delete slot;
+}
+
+// Try to queue a new read request
+void AsyncFileWriter::push_back(uint64_t offset, uint32_t size, void* data) {
+	assert(size <= max_chunk_size);
+
+	if (pending_count >= slots.size()) {
+		//Pop at least one slot
+		assert(this->try_pop_front(nullptr));
+		assert(pending_count < slots.size());
+	}
+
+	AsyncSlot* slot = slots[head];
+
+	// Setup OVERLAPPED offset
+	slot->ovl.Offset = (DWORD)(offset & 0xFFFFFFFF);
+	slot->ovl.OffsetHigh = (DWORD)(offset >> 32);
+
+	// Reset the event before issuing the read
+	ResetEvent(slot->ovl.hEvent);
+
+	memcpy(slot->buffer, data, size);
+
+	BOOL result = WriteFile(hFile, slot->buffer, size, NULL, &slot->ovl);
+
+	if (!result && GetLastError() != ERROR_IO_PENDING)
+		throwLastOsError();
+
+	slot->bytesUsed = size;
+	slot->is_pending = true;
+	head = (head + 1) % slots.size();
+	pending_count++;
+}
+
+// Wait for the oldest read and return its buffer
+bool AsyncFileWriter::try_pop_front(uint32_t* bytes_written) {
+	if (pending_count == 0) return false;
+
+	AsyncSlot* slot = slots[tail];
+	DWORD transferred = 0;
+
+	// This blocks efficiently if the I/O isn't done.
+	// If it's already done, it returns immediately.
+	BOOL result = GetOverlappedResult(hFile, &slot->ovl, &transferred, TRUE);
+	if (!result)
+		throwLastOsError();
+
+	// Release the slot after processing
+	slots[tail]->is_pending = false;
+	tail = (tail + 1) % slots.size();
+	pending_count--;
+
+	assert(transferred == slot->bytesUsed);
+	if (bytes_written) *bytes_written = transferred;
 }
