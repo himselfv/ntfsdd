@@ -48,7 +48,7 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 		LCN lcn = run.offset;
 		int64_t offsetBytes = run.offset * src.volumeData().BytesPerCluster;
 		srcOl.Offset = (DWORD)offsetBytes;
-		srcOl.OffsetHigh = offsetBytes >> sizeof(srcOl.Offset) * 8;
+		srcOl.OffsetHigh = offsetBytes >> (sizeof(srcOl.Offset) * 8);
 		destOl.Offset = srcOl.Offset;
 		destOl.OffsetHigh = srcOl.OffsetHigh;
 		//Will be auto-incremented with reads
