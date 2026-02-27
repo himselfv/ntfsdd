@@ -152,6 +152,7 @@
   <ItemGroup>
     <ClCompile Include="bitmap.tests.cpp" />
     <ClCompile Include="ntfsdd-tests.cpp" />
+    <ClCompile Include="ntfsutil.tests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ntfsdd-lib.vcxproj">
