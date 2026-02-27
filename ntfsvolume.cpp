@@ -199,14 +199,14 @@ AsyncSlot::~AsyncSlot() {
 	_aligned_free(buffer);
 }
 
-AsyncFileReader::AsyncFileReader(HANDLE file, size_t queue_depth, size_t chunk_size)
+AsyncSlotProcessor::AsyncSlotProcessor(HANDLE file, size_t queue_depth, size_t chunk_size)
 	: hFile(file), max_chunk_size(chunk_size) {
 	for (size_t i = 0; i < queue_depth; ++i) {
 		slots.push_back(new AsyncSlot(max_chunk_size));
 	}
 }
 
-AsyncFileReader::~AsyncFileReader() {
+AsyncSlotProcessor::~AsyncSlotProcessor() {
 	for (auto slot : slots) delete slot;
 }
 
@@ -241,7 +241,7 @@ bool AsyncFileReader::try_push_back(uint64_t offset, uint32_t size) {
 }
 
 // Wait for the oldest read and return its buffer
-uint8_t* AsyncFileReader::finalize_front(uint32_t* bytes_read) {
+uint8_t* AsyncFileReader::finalize_front(uint32_t* bytes_read, uint64_t* offset) {
 	if (pending_count == 0) return nullptr;
 
 	AsyncSlot* slot = slots[tail];
@@ -255,6 +255,9 @@ uint8_t* AsyncFileReader::finalize_front(uint32_t* bytes_read) {
 
 	assert(transferred == slot->bytesUsed);
 	if (bytes_read) *bytes_read = transferred;
+	if (offset != nullptr)
+		*offset = slot->ovl.Offset + slot->ovl.OffsetHigh << (sizeof(uint32_t) * 8);
+
 	return slot->buffer;
 }
 
@@ -267,17 +270,6 @@ void AsyncFileReader::pop_front() {
 	pending_count--;
 }
 
-
-AsyncFileWriter::AsyncFileWriter(HANDLE file, size_t queue_depth, size_t chunk_size)
-	: hFile(file), max_chunk_size(chunk_size) {
-	for (size_t i = 0; i < queue_depth; ++i) {
-		slots.push_back(new AsyncSlot(max_chunk_size));
-	}
-}
-
-AsyncFileWriter::~AsyncFileWriter() {
-	for (auto slot : slots) delete slot;
-}
 
 // Try to queue a new read request
 void AsyncFileWriter::push_back(uint64_t offset, uint32_t size, void* data) {
@@ -312,7 +304,7 @@ void AsyncFileWriter::push_back(uint64_t offset, uint32_t size, void* data) {
 }
 
 // Wait for the oldest read and return its buffer
-bool AsyncFileWriter::try_pop_front(uint32_t* bytes_written) {
+bool AsyncFileWriter::try_pop_front(uint32_t* bytes_written, uint64_t* offset) {
 	if (pending_count == 0) return false;
 
 	AsyncSlot* slot = slots[tail];
@@ -331,4 +323,6 @@ bool AsyncFileWriter::try_pop_front(uint32_t* bytes_written) {
 
 	assert(transferred == slot->bytesUsed);
 	if (bytes_written) *bytes_written = transferred;
+	if (offset != nullptr)
+		*offset = slot->ovl.Offset + slot->ovl.OffsetHigh << (sizeof(uint32_t) * 8);
 }

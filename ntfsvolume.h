@@ -112,8 +112,8 @@ struct AsyncSlot {
 	~AsyncSlot();
 };
 
-class AsyncFileReader {
-private:
+class AsyncSlotProcessor {
+public:
 	HANDLE hFile;
 	size_t max_chunk_size;
 	std::vector<AsyncSlot*> slots;
@@ -123,14 +123,19 @@ private:
 	size_t pending_count = 0;
 
 public:
-	AsyncFileReader(HANDLE file, size_t queue_depth, size_t chunk_size);
-	~AsyncFileReader();
+	AsyncSlotProcessor(HANDLE file, size_t queue_depth, size_t chunk_size);
+	~AsyncSlotProcessor();
+};
+
+class AsyncFileReader : public AsyncSlotProcessor {
+public:
+	using AsyncSlotProcessor::AsyncSlotProcessor;
 
 	// Try to queue a new read request
 	bool try_push_back(uint64_t offset, uint32_t size);
 
 	// Wait for the oldest read and return its buffer
-	uint8_t* finalize_front(uint32_t* bytes_read);
+	uint8_t* finalize_front(uint32_t* bytes_read, uint64_t* offset);
 
 	// Release the slot after processing
 	void pop_front();
@@ -150,23 +155,13 @@ public:
 а она бы тихонько в фоне несколькими или одним работником их писала.
 Ќо всЄ равно пришлось бы ограничивать еЄ длину, чтобы пам€ть не выросла бесконечно.
 */
-class AsyncFileWriter {
-private:
-	HANDLE hFile;
-	size_t max_chunk_size;
-	std::vector<AsyncSlot*> slots;
-
-	size_t head = 0;
-	size_t tail = 0;
-	size_t pending_count = 0;
-
+class AsyncFileWriter : public AsyncSlotProcessor {
 public:
-	AsyncFileWriter(HANDLE file, size_t queue_depth, size_t chunk_size);
-	~AsyncFileWriter();
+	using AsyncSlotProcessor::AsyncSlotProcessor;
 
 	// Queue a new write request
 	void push_back(uint64_t offset, uint32_t size, void* data);
 
 	// Block until the next queued write completes. False if no queued writes remains.
-	bool try_pop_front(uint32_t* bytes_written);
+	bool try_pop_front(uint32_t* bytes_written, uint64_t* offset);
 };
