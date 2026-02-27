@@ -42,7 +42,7 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 
 	HANDLE waitHandles[2] = { srcOl.hEvent, destOl.hEvent };
 
-	for (auto& run : BitmapSpans(&srcDiff)) {
+	for (auto& run : slice_runs(BitmapSpans(&srcDiff), BATCH_LEN)) {
 		stats.runsChecked++;
 
 		LCN lcn = run.offset;
@@ -53,51 +53,44 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 		destOl.OffsetHigh = srcOl.OffsetHigh;
 		//Will be auto-incremented with reads
 
-		LCN remainingLen = run.length;
-		while (remainingLen > 0) {
-			LCN len = remainingLen;
-			if (len > BATCH_LEN)
-				len = BATCH_LEN;
-			remainingLen -= len;
+		LCN lastClean = lcn - 1;
 
-			LCN lastClean = lcn - 1;
+		int64_t bytesToRead = run.length * src.volumeData().BytesPerCluster;
+		OSCHECKBOOL(src.read(srcBuf.data(), (DWORD)bytesToRead, nullptr, &srcOl));
+		OSCHECKBOOL(dest.read(destBuf.data(), (DWORD)bytesToRead, nullptr, &destOl));
 
-			int64_t bytesToRead = len * src.volumeData().BytesPerCluster;
-			OSCHECKBOOL(src.read(srcBuf.data(), (DWORD)bytesToRead, nullptr, &srcOl));
-			OSCHECKBOOL(dest.read(destBuf.data(), (DWORD)bytesToRead, nullptr, &destOl));
+		auto res = WaitForMultipleObjects(2, waitHandles, TRUE, INFINITE);
+		if (res < WAIT_OBJECT_0 || res > WAIT_OBJECT_0 + 1)
+			throwLastOsError();
 
-			auto res = WaitForMultipleObjects(2, waitHandles, TRUE, INFINITE);
-			if (res < WAIT_OBJECT_0 || res > WAIT_OBJECT_0 + 1)
-				throwLastOsError();
+		DWORD bytesRead = 0;
+		OSCHECKBOOL(src.getOverlappedResult(&srcOl, &bytesRead, TRUE));
+		assert(bytesRead == bytesToRead);
+		OSCHECKBOOL(src.getOverlappedResult(&destOl, &bytesRead, TRUE));
+		assert(bytesRead == bytesToRead);
 
-			DWORD bytesRead = 0;
-			OSCHECKBOOL(src.getOverlappedResult(&srcOl, &bytesRead, TRUE));
-			assert(bytesRead == bytesToRead);
-			OSCHECKBOOL(src.getOverlappedResult(&destOl, &bytesRead, TRUE));
-			assert(bytesRead == bytesToRead);
-
-			//Compare these cluster by cluster
-			auto srcPtr = srcBuf.data();
-			auto destPtr = destBuf.data();
-			while (len > 0) {
-				auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
-				if (diff != 0) {
-					stats.diffCount++;
-					this->onDirty(lcn, srcPtr);
-				}
-				else {
-					if (lastClean != lcn - 1)
-						this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
-					lastClean = lcn;
-				}
-				lcn++;
-				len--;
-				stats.clustersChecked++;
+		//Compare these cluster by cluster
+		auto srcPtr = srcBuf.data();
+		auto destPtr = destBuf.data();
+		auto len = run.length;
+		while (len > 0) {
+			auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
+			if (diff != 0) {
+				stats.diffCount++;
+				this->onDirty(lcn, srcPtr);
 			}
-			//We do not support "dirty spans" across chunk boundaries so finalize one if we have one
-			if (lastClean != lcn - 1)
-				this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
+			else {
+				if (lastClean != lcn - 1)
+					this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
+				lastClean = lcn;
+			}
+			lcn++;
+			len--;
+			stats.clustersChecked++;
 		}
+		//We do not support "dirty spans" across chunk boundaries so finalize one if we have one
+		if (lastClean != lcn - 1)
+			this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
 
 		if (stats.clustersChecked - lastProgress > 50000) {
 			lastProgress = stats.clustersChecked;

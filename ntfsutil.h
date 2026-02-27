@@ -164,3 +164,104 @@ public:
 	Iterator end() { return{ nullptr, 0 }; }
 };
 
+
+
+/*
+Iterates over cluster runs in continuous blocks of no more than max_block_size clusters.
+Usage:
+	for (auto& run : slice_runs(MyBaseRunIterator(..)), max_block_len) { .. }
+*/
+template <typename BaseIterator>
+class SlicedRunIterator {
+public:
+	using iterator_category = std::input_iterator_tag;
+	using value_type = ClusterRun;
+	using difference_type = std::ptrdiff_t;
+	using pointer = ClusterRun*;
+	using reference = ClusterRun&;
+
+	SlicedRunIterator(BaseIterator it, BaseIterator end, size_t max_block_size)
+		: it(it), end(end), max_size(max_block_size) {
+		if (it != end) {
+			current_run = *it;
+			consume_chunk();
+		}
+	}
+
+	// End iterator constructor
+	SlicedRunIterator(BaseIterator end)
+		: it(end), end(end), max_size(0), active(false) {}
+
+	ClusterRun operator*() const { return current_chunk; }
+
+	SlicedRunIterator& operator++() {
+		if (current_run.length > 0) {
+			consume_chunk();
+		}
+		else {
+			++it;
+			if (it != end) {
+				current_run = *it;
+				consume_chunk();
+			}
+			else {
+				active = false;
+			}
+		}
+		return *this;
+	}
+
+	bool operator!=(const SlicedRunIterator& other) const {
+		// If both are at the end
+		if (!active && !other.active) return false;
+		// Otherwise check underlying iterator and remaining length
+		return it != other.it ||
+			current_run.offset != other.current_run.offset ||
+			active != other.active;
+	}
+
+protected:
+	void consume_chunk() {
+		active = true;
+
+		current_chunk.offset = current_run.offset;
+		current_chunk.length = max_size;
+		if (current_chunk.length > current_run.length)
+			current_chunk.length = current_run.length;
+
+		current_run.offset += current_chunk.length;
+		current_run.length -= current_chunk.length;
+	}
+
+	BaseIterator it;
+	BaseIterator end;
+	size_t max_size;
+	ClusterRun current_run{ 0, 0 };   // The remainder of the current source run
+	ClusterRun current_chunk{ 0, 0 }; // The current capped piece
+	bool active = false;
+};
+
+template <typename BaseRange>
+class SlicedRunRange {
+	//Stores a reference in case we're passed a permanent base range,
+	//or the instance itself in case of a temporary.
+	BaseRange container_;
+	size_t max_sz;
+public:
+	typedef typename decltype(std::declval<BaseRange>().begin()) BaseIterator;
+
+	// We use forwarding to decide whether to store a reference or a copy
+	SlicedRunRange(BaseRange&& container, size_t sz)
+		: container_(std::forward<BaseRange>(container)), max_sz(sz) {}
+
+	auto begin() -> SlicedRunIterator<BaseIterator> {
+		return{ std::begin(container_), std::end(container_), max_sz };
+	}
+	auto end() -> SlicedRunIterator<BaseIterator> {
+		return{ std::end(container_) };
+	}
+};
+template <typename BaseRange>
+SlicedRunRange<BaseRange> slice_runs(BaseRange&& container, size_t max_sz) {
+	return SlicedRunRange<BaseRange>(std::forward<BaseRange>(container), max_sz);
+}

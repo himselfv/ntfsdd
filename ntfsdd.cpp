@@ -360,7 +360,7 @@ int main2(int argc, char* argv[]) {
 		t1 = GetTickCount();
 		cldiff.process(srcDiff);
 		std::cout << (GetTickCount() - t1) << std::endl;
-		std::cout << "Diff sectors: " << cldiff.stats.diffCount << std::endl;
+		std::cout << "Diff clusters: " << cldiff.stats.diffCount << std::endl;
 	}
 
 

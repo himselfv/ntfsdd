@@ -135,7 +135,7 @@ public:
 	bool try_push_back(uint64_t offset, uint32_t size);
 
 	// Wait for the oldest read and return its buffer
-	uint8_t* finalize_front(uint32_t* bytes_read, uint64_t* offset);
+	uint8_t* finalize_front(uint32_t* bytes_read, uint64_t* offset = nullptr);
 
 	// Release the slot after processing
 	void pop_front();
@@ -163,5 +163,5 @@ public:
 	void push_back(uint64_t offset, uint32_t size, void* data);
 
 	// Block until the next queued write completes. False if no queued writes remains.
-	bool try_pop_front(uint32_t* bytes_written, uint64_t* offset);
+	bool try_pop_front(uint32_t* bytes_written, uint64_t* offset = nullptr);
 };
