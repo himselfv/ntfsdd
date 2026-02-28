@@ -13,7 +13,7 @@ class VolumeLock {
 protected:
 	Volume* volume;
 public:
-	VolumeLock(Volume& volume);
+	VolumeLock(Volume& volume, bool ignoreErrors = false);
 	~VolumeLock();
 };
 

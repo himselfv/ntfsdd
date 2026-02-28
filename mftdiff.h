@@ -50,6 +50,7 @@ struct FileEntry {
 struct ShortFileInfo {
 	std::string filename{};
 	LCN totalClusters = 0;
+	bool skip = false; //If set, ignore this file; do not include its clusters nor its mft segments.
 };
 
 /*

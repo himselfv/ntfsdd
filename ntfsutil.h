@@ -31,6 +31,7 @@ inline void throwLastOsError(const std::string& message) {
 }
 #define OSCHECKBOOL(...) if(!__VA_ARGS__) throwLastOsError(#__VA_ARGS__);
 
+
 #define assert(COND) if(!(COND)) throw std::runtime_error(#COND);
 
 

@@ -1,13 +1,18 @@
 #pragma once
 #include "ntfsvolume.h"
 
-VolumeLock::VolumeLock(Volume& volume)
+VolumeLock::VolumeLock(Volume& volume, bool ignoreErrors)
 	: volume(&volume)
 {
 	DWORD bytesReturned;
-	if (!volume.ioctl(FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
-		throwLastOsError("FSCTL_LOCK_VOLUME");
-	std::cerr << "Volume locked." << std::endl;
+	if (!volume.ioctl(FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL)) {
+		if (!ignoreErrors)
+			throwLastOsError("FSCTL_LOCK_VOLUME");
+		std::cerr << "WARNING: Cannot lock volume. Error " << GetLastError() << "." << std::endl;
+	}
+	else {
+		std::cerr << "Volume locked." << std::endl;
+	}
 }
 
 VolumeLock::~VolumeLock()

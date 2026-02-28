@@ -168,7 +168,7 @@ void Bitmap::print()
 {
 	int64_t idx = 0;
 	const_cast<Bitmap*>(this)->apply_operation1(
-		[&idx](uint64_t* ptr) { idx++; std::cout << std::bitset<64>(*ptr) << std::endl; return true; }
+		[&idx](uint64_t* ptr) { idx++; std::cerr << std::bitset<64>(*ptr) << std::endl; return true; }
 	);
 }
 

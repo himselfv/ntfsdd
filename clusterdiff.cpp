@@ -20,7 +20,6 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 	//Must be a multiple of logical sector size. Read batches must be a multiple of this.
 
 	//Ideally this is physical sector size, except SSDs lie and emulate 512b where they have 4096b, so in this case we want 4096.
-	//TODO: Allow the user to override and give us True Physical Sector Size.
 	//int64_t COMPARISON_UNIT_SZ = src.extendedVolumeData().BytesPerPhysicalSector;
 	//Well, there's a safer way: work in clusters. It's not ideal if the true sector size is less, but it is also not bad. This is how the OS handles it after all.
 
@@ -42,7 +41,7 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 	auto sliceIt = slicedRuns.begin();
 
 	while (true) {
-		//Часть 1. Запихиваем команды чтения в очередь
+		//Part 1. Push read commands into the queue
 		while (sliceIt != slicedRuns.end()) {
 			if (!srcReader.try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
 				break;
@@ -50,8 +49,8 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 			++sliceIt;
 		}
 
-		//Часть 2. Достаём следующий элемент.
-		//Проще за цикл вытаскивать по одному и добавлять по одному. Если сделано несколько, циклы подряд будут быстрыми.
+		//Part 2. Extract next element.
+		//Easier to pop exactly one read a cycle and push one new. If multiple are done, next few cycles will just be fast.
 		uint32_t bytesRead = 0, bytesRead2 = 0;
 		uint64_t offset = 0, offset2 = 0;
 		auto srcPtr = srcReader.finalize_front(&bytesRead, &offset);
@@ -116,17 +115,17 @@ void ClusterDiffComparer::onProgress(LCN lcn)
 	auto t2 = GetTickCount() - this->m_progress_tm + 1; //To avoid div by zero.
 	this->m_progress_tm += t2;
 
-	std::cout << "Clusters: " << stats.clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount / t2 << ", rpm=" << (double)thisRunCount / t2 << std::endl;
+	std::cerr << "Clusters: " << stats.clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount / t2 << ", rpm=" << (double)thisRunCount / t2 << std::endl;
 	this->m_progress_prevStats = this->stats;
 }
 
 void ClusterDiffComparer::onDirty(LCN lcn, void* data)
 {
-	//std::cout << "Diff: " << lcn << std::endl;
-	//TODO: Add to write queue
 }
 
 void ClusterDiffComparer::onDirtySpan(LCN lcnFirst, LCN len, void* data)
 {
-	//std::cout << "Span: " << lcnFirst << ":" << len << std::endl;
+	//std::cerr << "Span: " << lcnFirst << ":" << len << std::endl;
+	//TODO: Add to write queue in write mode.
+	//TODO: Print to stdout in compare mode.
 }

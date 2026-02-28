@@ -26,7 +26,7 @@ std::string enumName(Enum value) {
 }
 
 
-enum class DdAction : int { List, Compare, Copy, Rvw, VerifyBitmap };
+enum class DdAction : int { List, Compare, Copy, Rcw, VerifyBitmap };
 template<> struct EnumNames<DdAction> {
 	typedef std::map<std::string, DdAction> Map;
 	static const Map map() {
@@ -34,7 +34,7 @@ template<> struct EnumNames<DdAction> {
 			{ "list", DdAction::List },			//List candidate sectors
 			{ "compare", DdAction::Compare },	//Compare candidate sectors
 			{ "copy", DdAction::Copy },			//Copy all candidate sectors
-			{ "rvw", DdAction::Rvw },			//Verify candidate sectors and copy the changed ones
+			{ "rcw", DdAction::Rcw },			//Compare candidate sectors and copy the changed ones
 			{ "verifyBitmap", DdAction::VerifyBitmap },	//Rebuild $Bitmap from MFT and compare to the actual one.
 		};
 		return m;
@@ -75,6 +75,155 @@ template<> struct EnumNames<DdTrim> {
 std::ostream& operator<<(std::ostream &os, const DdTrim &value) {
 	return (os << enumName(value));
 }
+
+
+
+
+/*
+Things we could receive from the user:
+
+Volume GUIDs:
+    \\?\Volume{GUID}\
+Good for reading and writing, but as a safety I want to ensure write targets have no mount points.
+GetVolumePathNamesForVolumeName will give us all mount points.
+
+Drive letters and mount points:
+	D:
+	D:\Path
+Good for reading and writing, but as a safety - see above: no writing unless explicitly overriden.
+GetVolumeNameForVolumeMountPoint will find its volume GUID.
+
+Windows is already very picky about mounted volumes. You will likely need a shadow copy as a source.
+
+Shadow copies:
+	\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy...
+Good for reading, unsuitable for writing.
+
+Mounted shadow copies!
+	T:
+	D:\ShadowCopies\Abcd
+GetVolumeNameForVolumeMountPoint will not work.
+QueryDosDevice might resolve drive letter, GetFinalPathNameByHandleW a mount point (reparse point).
+But I don't really want to get so involved.
+
+Files:
+	D:\Path\disk.img
+Surprisingly fitting for our goals. But the entire space has to be reserved in the file.
+
+PhysicalDrive and Partition objects:
+	\\.\PhysicalDrive0
+	\\.\Harddisk0Partition1
+Not the same thing as volumes, and we are likely better off not messing with them.
+
+
+So the question is:
+- Is this a drive letter or a mount point?
+- Is this a volume GUID path?
+  Add trailing backslash.
+  Resolve to GUID path.		//This works even if it's already a GUID path.
+  Print all mount points.
+  Stop, unless there are none or --unmount is passed.
+
+- Is this a file?
+  Just open it in exclusive mode. No locking needed.
+
+- Is this something else? (VSS included)
+  Rely on our ability to open for writing, but maybe be a little bit more permissive about locking not working.
+  Or maybe add --no-lock-src --no-lock-dest. Though VSS locking works fine!
+
+
+You know what? Let's not be too smart. FSCTL_LOCK_VOLUME only works for volumes and VSS shadow copies.
+So try to resolve the volume to its GUID, and if it works, apply volume logic.
+
+Shadow copies are an exception. They will fail the GUID resolution but can still benefit from locking.
+So let's try this:
+1. Resolve to volume GUID? Mount point logic + enable FSCTL_LOCK_VOLUME.
+2. FSCTL_IS_VOLUME_MOUNTED? (Works for shadow copies) Enable FSCTL_LOCK_VOLUME.
+3. Otherwise do FSCTL_LOCK_VOLUME but do not check the result. Or maybe do check but there are different results for "cannot lock" and "wtf are you talking about"
+*/
+
+/*
+Resolves any volume mount point to a volume GUID path:
+  \\?\Volume{GUID}\
+Only works for normal volumes, not VSS shadows.
+*/
+bool resolveVolumeGuid(const std::string& volumePath, std::string& volumeGuid)
+{
+	auto volumePathNormalized = volumePath;
+	if (!volumePathNormalized.empty() && (volumePathNormalized.back() != '\\'))
+		volumePathNormalized += '\\';
+	volumeGuid.resize(50); // GUID paths are fixed length
+	if (!GetVolumeNameForVolumeMountPointA(volumePathNormalized.c_str(), &volumeGuid[0], 50)) {
+		auto err = GetLastError();
+		if (err = ERROR_INVALID_NAME)
+			return false;
+		throwOsError(err, std::string("Cannot resolve a volume mount point: ")+volumePath);
+	}
+	return true;
+}
+
+std::vector<std::string> getVolumeMountPoints(const std::string& volumeGuid)
+{
+	std::vector<std::string> results;
+	DWORD bufferLength = 0;
+
+	auto volumeGuidNormalized = volumeGuid;
+	if (!volumeGuidNormalized.empty() && (volumeGuidNormalized.back() != '\\'))
+		volumeGuidNormalized += '\\';
+
+	if (!GetVolumePathNamesForVolumeNameA(volumeGuidNormalized.c_str(), NULL, 0, &bufferLength)) {
+		auto err = GetLastError();
+		if (err != ERROR_MORE_DATA)
+			throwOsError(err, "GetVolumePathNamesForVolumeName");
+	}
+
+	std::vector<char> buffer(bufferLength);
+
+	if (!GetVolumePathNamesForVolumeNameA(volumeGuidNormalized.c_str(), buffer.data(), bufferLength, &bufferLength))
+		throwLastOsError("GetVolumePathNamesForVolumeName");
+
+	//Parse the multistring buffer
+	char* currentPath = buffer.data();
+	while (*currentPath != '\0') {
+		results.push_back(std::string(currentPath));
+		currentPath += strlen(currentPath) + 1;
+	}
+	return results;
+}
+
+/*
+Prints mount points/verifies there are none, according to the flags passed.
+Returns true if the path is indeed a volume mount point or its GUID path.
+*/
+bool verifyMountPoints(const std::string& volumePath, bool printMountPoints, bool requireNoMountpoints)
+{
+	std::string volumeGuid {};
+	if (!resolveVolumeGuid(volumePath, volumeGuid)) {
+		//Okay, we tried
+		if (printMountPoints)
+			std::cerr << volumePath << " doesn't seem to be a standard volume with mount point support." << std::endl;
+		return false; //Doesn't seem to be a standard volume, can't help with mount points
+	}
+
+	std::vector<std::string>  {};
+	auto mountPoints = getVolumeMountPoints(volumeGuid);
+
+	if (mountPoints.empty()) {
+		if (printMountPoints)
+			std::cerr << "Volume " << volumeGuid << " has no mount points." << std::endl;
+	} else
+	{
+		if (printMountPoints || requireNoMountpoints) {
+			std::cerr << "Volume " << volumeGuid << " mount points:" << std::endl;
+			for (auto& mountPoint : mountPoints)
+				std::cerr << "  " << mountPoint << std::endl;
+		}
+		if (requireNoMountpoints)
+			throw std::runtime_error(volumePath + std::string{ " has active mount points. Check that this is really the volume you meant. Dismount beforehand and use its GUID path." });
+	}
+	return true;
+}
+
 
 
 class Volume2 : public Volume {
@@ -209,72 +358,113 @@ void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const BitmapBuf
 }
 
 
+
 int main2(int argc, char* argv[]) {
 	CLI::App app{ "NTFS Rapid Delta dd", "ntfsdd" };
 
 	std::string srcPath, destPath;
-	DdAction action{ DdAction::Compare };
-	DdMode mode{ DdMode::MFT };
-	DdTrim trim{ (DdTrim)(-1) };
-	bool bSafetyOverride = false;
-	bool bPrintDirtyFiles = false;
-
 	app.add_option("source", srcPath, "Source device/file")->required();
 	app.add_option("target", destPath, "Target device/file")->required();
 
-	// Options with set validation
+	DdAction action{ DdAction::Compare };
 	app.add_option("--action", action, "Action to take")
-		->type_name("list|verify|copy|rvw")
+		->type_name("list|verify|copy|rcw")
 		->transform(CLI::CheckedTransformer(EnumNames<DdAction>::map(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
 
+	DdMode mode{ DdMode::MFT };
 	app.add_option("--mode", mode, "Method to use")
 		->type_name("all|bitmap|mft")
 		->transform(CLI::CheckedTransformer(EnumNames<DdMode>::map(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
 
+/*
+	Do you really want us messing with trim? No, you don't. Do defrag /retrim from time to time.
+
+	DdTrim trim{ (DdTrim)(-1) };
 	app.add_option("--trim", trim, "Trim unused sectors")
 		->type_name("none|changes|all")
 		->transform(CLI::CheckedTransformer(EnumNames<DdTrim>::map(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
+*/
 
-	app.add_flag("--safety-override", bSafetyOverride, "Continue even if the destination does not seem like the clone of the source")
+	bool bAllowMounted = false;
+	app.add_flag("--unsafe-allow-mounted", bAllowMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch. Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
 		->capture_default_str()
 		;
 
+	bool bAllowNonMatching = false;
+	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem like the clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
+		->capture_default_str()
+		;
+
+	bool bPrintDirtyFiles = false;
 	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "Print details on the MFT segments that are deemed dirty.")
 		->capture_default_str()
 		;
 
+	//We'll enforce FSCTL_LOCK_VOLUME where it seems reasonable and TRY it elsewhere.
+	//These flags force us to insist on it even if we're not sure it should work.
+	bool bForceLockSrc = false;
+	bool bForceLockDest = false;
+	app.add_flag("--force-lock-src", bForceLockSrc, "Force FSCTL_LOCK_VOLUME on the source even when it doesn't seem to be a volume.")
+		->capture_default_str()
+		;
+	app.add_flag("--force-lock-dest", bForceLockDest, "Force FSCTL_LOCK_VOLUME on the destination even when it doesn't seem to be a volume.")
+		->capture_default_str()
+		;
+
+	bool write_mode = false;
+	app.add_flag("--write", write_mode, "Write to destination. Without this flag we will not actually open the destination as writeable.")
+		->capture_default_str()
+		;
+
+	bool verbose = false;
+	app.add_flag("--verbose", verbose, "Detailed logging.")
+		->capture_default_str()
+		;
+
+/*
+	Not implemented yet.
+
+	std::vector<SegmentNumber> skipSegments {};
+	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers");
+*/
 
 	CLI11_PARSE(app, argc, argv);
 
 	// Open Handles
+	bool srcIsVolume = verifyMountPoints(srcPath, verbose, false);
 	auto src = Volume2();
 	src.open(srcPath, GENERIC_READ);
 
+	bool destIsVolume = verifyMountPoints(destPath, verbose, !bAllowMounted);
 	DWORD dwDestMode = GENERIC_READ;
-//	if (action == DdAction::Copy || action == DdAction::Rvw)
+//	if (write_mode && (action == DdAction::Copy || action == DdAction::Rcw))
 //		dwDestMode |= GENERIC_WRITE;
 	auto dest = Volume2();
 	dest.open(destPath, dwDestMode);
 
-	std::cerr << src.h() << dest.h() << std::endl;
+	if (verbose) {
+		std::cerr << "Source handle: " << src.h() << std::endl;
+		std::cerr << "Destination handle: " << dest.h() << std::endl;
+	}
 
-	compareVolumeParams(src, dest, bSafetyOverride);
+	compareVolumeParams(src, dest, bAllowNonMatching);
 
 	// 2. Prepare Target (Lock and Dismount)
 	std::cerr << "Locking src..." << std::endl;
-	VolumeLock srcLock(src);
+	VolumeLock srcLock(src, !srcIsVolume && !bForceLockSrc);
 	std::cerr << "Locking dest..." << std::endl;
-	VolumeLock dstLock(dest);
+	VolumeLock dstLock(dest, !destIsVolume && !bForceLockDest);
+
 	/*
-	Dismount after locking. Dismounting triggers various activity for 5-8 seconds which prevents locking
-	as system services keep the volume in use.
-	Note that if you re-run the app too soon after a succesfull lock+dismount, new lock will fail due to the dismount activity still going on.
+	Do not dismount.
+	Dismounting triggers various system activity for 5-8 seconds which prevents locking.
+	Locking first works, but fails if you re-run the app too soon after a succesfull lock+dismount due to the activity still going on.
 	
 	But we don't really need to dismount, as NTFS "treats locked volumes as dismounted".
 	So we're already in a more powerful state.
@@ -285,28 +475,28 @@ int main2(int argc, char* argv[]) {
 	*/
 
 	// Open and scan MFT
-	std::cout << "Loading MFT structures..." << std::endl;
+	std::cerr << "Loading MFT structures..." << std::endl;
 	src.loadMftStructure();
 	dest.loadMftStructure();
 
-	std::cout << "Loading stored bitmap..." << std::endl;
+	std::cerr << "Loading stored bitmap..." << std::endl;
 	NtfsBitmapFile srcBitmap(&src, &src.mft);
 	NtfsBitmapFile destBitmap(&src, &src.mft);
 
-	std::cout << "Verifying MFT layouts..." << std::endl;
+	std::cerr << "Verifying MFT layouts..." << std::endl;
 	verifyMftLayout(src, src.mft, srcBitmap.buf);
 	verifyMftLayout(dest, dest.mft, nullptr);
 
 	BitmapBuf srcUsed;
 	CandidateClusterMap srcDiff;
 	if (action == DdAction::VerifyBitmap) {
-		std::cout << "Recalculating $Bitmap..." << std::endl;
+		std::cerr << "Recalculating $Bitmap..." << std::endl;
 		auto t1 = GetTickCount();
 		rebuildVolumeBitmap(src, src.mft, &srcUsed);
-		std::cout << (GetTickCount() - t1) << std::endl;
+		std::cerr << (GetTickCount() - t1) << std::endl;
 	}
-	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
-		std::cout << "Building file table bitmaps..." << std::endl;
+	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rcw) {
+		std::cerr << "Building file table bitmaps..." << std::endl;
 		auto t1 = GetTickCount();
 		switch (mode) {
 		case DdMode::All:
@@ -317,54 +507,53 @@ int main2(int argc, char* argv[]) {
 				srcDiff.set(run);
 			break;
 		case DdMode::MFT: {
-			std::cout << "Reading MFT segments..." << std::endl;
+			std::cerr << "Reading MFT segments..." << std::endl;
 			MftDiff diff(src.mft, dest.mft);
 			diff.printDirtyFiles = bPrintDirtyFiles;
 			diff.scan();
 			srcDiff = std::move(diff.srcDiff);
-			std::cout << "Used segments: " << diff.stats.usedSegments << std::endl;
-			std::cout << "Dirty segments: " << diff.stats.dirtySegments << std::endl;
-			std::cout << "Multisegments: " << diff.stats.multiSegments << std::endl;
+			std::cerr << "Used segments: " << diff.stats.usedSegments << std::endl;
+			std::cerr << "Dirty segments: " << diff.stats.dirtySegments << std::endl;
+			std::cerr << "Multisegments: " << diff.stats.multiSegments << std::endl;
 			break;
 		}
 		}
-		std::cout << (GetTickCount() - t1) << std::endl;
+		std::cerr << (GetTickCount() - t1) << std::endl;
 	}
 
 	//≈сли в результате VerifyBitmap или любого действи€ с mode==MFT расчитали карту кластеров, то сравниваем еЄ с $Bitmap.
 	//Ќо в не€вных случа€х молчим, если всЄ в пор€дке.
 	if (srcUsed.size > 0) {
 		//”беждаемс€, что srcUsed действительно закрывает то же, что говорит $Bitmap.
-		std::cout << "Verifying file table bitmap..." << std::endl;
+		std::cerr << "Verifying file table bitmap..." << std::endl;
 		auto cmp = compareBitmaps(srcBitmap.buf, &srcUsed);
 		if (!cmp)
 			throw std::runtime_error(std::string{ "Manually constructed bitmap is not identical to the NTFS one!" });
 	}
 
-	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rvw) {
+	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rcw) {
 		int64_t candidateClusterCount = 0;
 		for (auto& run : BitmapSpans(&srcDiff)) {
 			candidateClusterCount +=run.length;
 			if (action == DdAction::List)
 				std::cout << run.offset << "-" << run.offset+run.length << std::endl;
 		}
-		std::cout << "Candidate cluster count: " << candidateClusterCount << std::endl;
+		std::cerr << "Candidate cluster count: " << candidateClusterCount << std::endl;
 
 		//Safety: ѕровер€ем, что наш получившийс€ список содержит все кластеры srcBitmap, уникальные дл€ него (т.е. перешедшие в состо€ние 1 с момента destBitmap)
 		//If $Bitmap shows a block was turned from free to used, warn and copy it, as that should not happen if I'm parsing MFT correctly.
 		auto t1 = GetTickCount();
 		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
-		std::cout << (GetTickCount() - t1) << std::endl;
+		std::cerr << (GetTickCount() - t1) << std::endl;
 
 		ClusterDiffComparer cldiff(src, dest);
 		t1 = GetTickCount();
 		cldiff.process(srcDiff);
-		std::cout << (GetTickCount() - t1) << std::endl;
-		std::cout << "Diff clusters: " << cldiff.stats.diffCount << std::endl;
+		std::cerr << (GetTickCount() - t1) << std::endl;
+		std::cerr << "Diff clusters: " << cldiff.stats.diffCount << std::endl;
 	}
 
 	// Cleanup
-	std::cout << "Done.\n";
 	return 0;
 }
 
@@ -373,7 +562,7 @@ int main(int argc, char* argv[]) {
 		main2(argc, argv);
 	}
 	catch (const std::exception& e) {
-		std::cout << e.what();
+		std::cerr << e.what();
 		return -1;
 	}
 }

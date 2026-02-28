@@ -185,10 +185,10 @@ void MftDiff::scan()
 
 void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)
 {
-	std::cout << idx << " / " << totalSegments << std::endl;
+	std::cerr << idx << " / " << totalSegments << std::endl;
 }
 
 void MftDiff::onDirtyFile(const ShortFileInfo& fi)
 {
-	std::cout << "Dirty: " << fi.filename << " clusters=" << fi.totalClusters << std::endl;
+	std::cerr << "Dirty: " << fi.filename << " clusters=" << fi.totalClusters << std::endl;
 }
