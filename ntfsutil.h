@@ -34,6 +34,7 @@ inline void throwLastOsError(const std::string& message) {
 #define assert(COND) if(!(COND)) throw std::runtime_error(#COND);
 
 
+
 class AttributeIterator {
 public:
 	struct Iterator {
@@ -192,7 +193,8 @@ public:
 	SlicedRunIterator(BaseIterator end)
 		: it(end), end(end), max_size(0), active(false) {}
 
-	ClusterRun operator*() const { return current_chunk; }
+	inline ClusterRun operator*() const { return current_chunk; }
+	inline ClusterRun* operator->() { return &current_chunk; }
 
 	SlicedRunIterator& operator++() {
 		if (current_run.length > 0) {
@@ -218,6 +220,9 @@ public:
 		return it != other.it ||
 			current_run.offset != other.current_run.offset ||
 			active != other.active;
+	}
+	inline bool operator==(const SlicedRunIterator& other) const {
+		return !(*this != other);
 	}
 
 protected:

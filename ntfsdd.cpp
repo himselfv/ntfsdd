@@ -363,7 +363,6 @@ int main2(int argc, char* argv[]) {
 		std::cout << "Diff clusters: " << cldiff.stats.diffCount << std::endl;
 	}
 
-
 	// Cleanup
 	std::cout << "Done.\n";
 	return 0;

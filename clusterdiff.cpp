@@ -24,56 +24,57 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 	//int64_t COMPARISON_UNIT_SZ = src.extendedVolumeData().BytesPerPhysicalSector;
 	//Well, there's a safer way: work in clusters. It's not ideal if the true sector size is less, but it is also not bad. This is how the OS handles it after all.
 
+	auto BytesPerCluster = this->src.volumeData().BytesPerCluster;
+	assert(BytesPerCluster > 0);
+
 	LCN lastProgress = 0;
 	this->onProgress(0);
 
 	//Max size of the single chunk for a read operation, in clusters
 	//Bigger spans will be processed in chunks. Too large chunks would hinder parallelization when chunks of wildly different sizes are processed one after another.
 	static constexpr LCN BATCH_LEN = 160;
-	int64_t BATCH_SZ = BATCH_LEN * src.volumeData().BytesPerCluster;
+	int64_t BATCH_SZ = BATCH_LEN * BytesPerCluster;
 
-	std::vector<uint8_t> srcBuf;
-	srcBuf.resize(BATCH_SZ);
-	std::vector<uint8_t> destBuf;
-	destBuf.resize(BATCH_SZ);
+	AsyncFileReader srcReader(src.h(), 16, BATCH_SZ);
+	AsyncFileReader destReader(dest.h(), 16, BATCH_SZ);
 
-	Overlapped srcOl;
-	Overlapped destOl;
+	auto slicedRuns = slice_runs(BitmapSpans(&srcDiff), BATCH_LEN);
+	auto sliceIt = slicedRuns.begin();
 
-	HANDLE waitHandles[2] = { srcOl.hEvent, destOl.hEvent };
+	while (true) {
+		//Часть 1. Запихиваем команды чтения в очередь
+		while (sliceIt != slicedRuns.end()) {
+			if (!srcReader.try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
+				break;
+			assert(destReader.try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)));
+			++sliceIt;
+		}
 
-	for (auto& run : slice_runs(BitmapSpans(&srcDiff), BATCH_LEN)) {
+		//Часть 2. Достаём следующий элемент.
+		//Проще за цикл вытаскивать по одному и добавлять по одному. Если сделано несколько, циклы подряд будут быстрыми.
+		uint32_t bytesRead = 0, bytesRead2 = 0;
+		uint64_t offset = 0, offset2 = 0;
+		auto srcPtr = srcReader.finalize_front(&bytesRead, &offset);
+		if (srcPtr == nullptr) {
+			assert(sliceIt == slicedRuns.end());
+			assert(srcReader.pending_count == 0);
+			assert(destReader.pending_count == 0);
+			break;
+		}
+		assert(offset % BytesPerCluster == 0);
+		assert(bytesRead % BytesPerCluster == 0);
+		auto destPtr = destReader.finalize_front(&bytesRead2, &offset2);
+		assert(destPtr != nullptr);
+		assert(bytesRead == bytesRead2);
+		assert(offset == offset2);
+		
 		stats.runsChecked++;
 
-		LCN lcn = run.offset;
-		int64_t offsetBytes = run.offset * src.volumeData().BytesPerCluster;
-		srcOl.Offset = (DWORD)offsetBytes;
-		srcOl.OffsetHigh = offsetBytes >> (sizeof(srcOl.Offset) * 8);
-		destOl.Offset = srcOl.Offset;
-		destOl.OffsetHigh = srcOl.OffsetHigh;
-		//Will be auto-incremented with reads
-
+		LCN lcn = offset / BytesPerCluster;
 		LCN lastClean = lcn - 1;
 
-		int64_t bytesToRead = run.length * src.volumeData().BytesPerCluster;
-		OSCHECKBOOL(src.read(srcBuf.data(), (DWORD)bytesToRead, nullptr, &srcOl));
-		OSCHECKBOOL(dest.read(destBuf.data(), (DWORD)bytesToRead, nullptr, &destOl));
-
-		auto res = WaitForMultipleObjects(2, waitHandles, TRUE, INFINITE);
-		if (res < WAIT_OBJECT_0 || res > WAIT_OBJECT_0 + 1)
-			throwLastOsError();
-
-		DWORD bytesRead = 0;
-		OSCHECKBOOL(src.getOverlappedResult(&srcOl, &bytesRead, TRUE));
-		assert(bytesRead == bytesToRead);
-		OSCHECKBOOL(src.getOverlappedResult(&destOl, &bytesRead, TRUE));
-		assert(bytesRead == bytesToRead);
-
 		//Compare these cluster by cluster
-		auto srcPtr = srcBuf.data();
-		auto destPtr = destBuf.data();
-		auto len = run.length;
-		while (len > 0) {
+		while (bytesRead > 0) {
 			auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
 			if (diff != 0) {
 				stats.diffCount++;
@@ -85,16 +86,19 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 				lastClean = lcn;
 			}
 			lcn++;
-			len--;
+			bytesRead -= BytesPerCluster;
 			stats.clustersChecked++;
 		}
 		//We do not support "dirty spans" across chunk boundaries so finalize one if we have one
 		if (lastClean != lcn - 1)
 			this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
 
+		srcReader.pop_front();
+		destReader.pop_front();
+
 		if (stats.clustersChecked - lastProgress > 50000) {
 			lastProgress = stats.clustersChecked;
-			this->onProgress(run.offset + run.length);
+			this->onProgress((offset2 + bytesRead2) / BytesPerCluster);
 		}
 	}
 }
