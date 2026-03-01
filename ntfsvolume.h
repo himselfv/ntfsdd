@@ -80,25 +80,12 @@ public:
 	VOLUME_BITMAP_BUFFER* queryVolumeBitmap();
 };
 
+
+
 /*
-Что нужно от читалки с помощью OVERLAPPED:
-- Очередь заданий на чтение
-- Последовательно записываются в закольцованный буфер
-- Буфер достаточно большой, чтобы вместить 4-5 максимальных заданий
-- Что, если для крайнего нижнего задания не хватает места без закольцовывания?
- Это неудобно. Можно оставить ещё один максимальный участок в конце в качестве запаса, но не начинать внутри него.
-- Что, если после закольцовывания не хватает места для нового участка, т.к. он больше прежнего? Ждём, пока не освободится.
-
-Как должно работать получение следующего участка:
-- Если есть возможность (есть свободное места для следующего участка), ставим запросы на чтение (столько, сколько влезет) и сдвигаем указатели.
-  while (push_read(srcIt)) srcIt++;
-  while (push_read(destIt)) srcIt++;
-- Если с другого конца имеется прочитанный участок, достаём его
-- Иначе висим на чём-то и ждём.
-
-На чём висим?
-try_push_back() берёт первый свободный OVERLAPPED и инициирует чтение на нём, затем добавляет пачку "overlapped, адрес, размер, буфер" в список чтений
-finalize_front() проверяет, что первый пункт в списке чтений активен и ждёт, пока он закончится. Финализирует его. Выпускает overlapped.
+Overlapped reader/writer queues.
+Accept up to N simultaneous outstanding requests, each up to max_block_size in size.
+The slot memory is limited, please slice your requests according to the limits you set.
 */
 
 #define AFR_ZEROMEM
@@ -127,6 +114,15 @@ public:
 	~AsyncSlotProcessor();
 };
 
+/*
+Overlapped reader queue.
+
+Usage:
+- Push as many read requests as the queue accepts.
+- Wait for the first to complete (blocking).
+- Extract the data, process it.
+- Release the slot.
+*/
 class AsyncFileReader : public AsyncSlotProcessor {
 public:
 	using AsyncSlotProcessor::AsyncSlotProcessor;
@@ -143,17 +139,22 @@ public:
 
 
 /*
-Очередь на запись, аналогичная очереди на чтение.
+Overlapped writer queue.
 
-Только на этот раз она блокирует сразу в push_back, если свободных слотов нет.
-Там же она и освобождает завершившиеся.
+Similar to the reader queue but push_back() blocks when there are no free slots
+and auto-finalizes completed requests.
 
-Есть отдельная функция try_finalize_front, которая тоже блокирующая и возвращает false, если все слоты свободны.
-Нужна, чтобы доделать задания, оставшиеся, когда добавлять уже больше нечего.
+Separate try_finalize_front() which is also blocking and returns false if all slots are free.
+Needed to finalize the requests remaining when there's nothing left to push_back().
 
-Можно было бы сделать отдельную бесконечную очередь, куда клиенты бы безблокировочно ставили задания,
-а она бы тихонько в фоне несколькими или одним работником их писала.
-Но всё равно пришлось бы ограничивать её длину, чтобы память не выросла бесконечно.
+Usage:
+- Push all write requests to the queue (blocking).
+- No need to pop manually, push auto-pops auto-verifies success.
+- On exit: Pop the remainder of the requests until false.
+
+Why not an endless queue which accepts infinite requests and quietly works through them
+in the background?
+We would still have to limit it bc the data sizes here can easily surpass RAM.
 */
 class AsyncFileWriter : public AsyncSlotProcessor {
 public:

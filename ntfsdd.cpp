@@ -32,7 +32,7 @@ template<> struct EnumNames<DdAction> {
 	static const Map map() {
 		static const Map m{
 			{ "list", DdAction::List },			//List candidate sectors
-			{ "compare", DdAction::Compare },	//Compare candidate sectors
+			{ "compare", DdAction::Compare },	//Compare candidate sectors and print the differences
 			{ "copy", DdAction::Copy },			//Copy all candidate sectors
 			{ "rcw", DdAction::Rcw },			//Compare candidate sectors and copy the changed ones
 			{ "verifyBitmap", DdAction::VerifyBitmap },	//Rebuild $Bitmap from MFT and compare to the actual one.
@@ -60,6 +60,7 @@ std::ostream& operator<<(std::ostream &os, const DdMode &value) {
 	return (os << enumName(value));
 }
 
+/*
 enum class DdTrim : int { None, Changes, All };
 template<> struct EnumNames<DdTrim> {
 	typedef std::map<std::string, DdTrim> Map;
@@ -75,7 +76,7 @@ template<> struct EnumNames<DdTrim> {
 std::ostream& operator<<(std::ostream &os, const DdTrim &value) {
 	return (os << enumName(value));
 }
-
+*/
 
 
 
@@ -87,6 +88,7 @@ Volume GUIDs:
 Good for reading and writing, but as a safety I want to ensure write targets have no mount points.
 GetVolumePathNamesForVolumeName will give us all mount points.
 
+
 Drive letters and mount points:
 	D:
 	D:\Path
@@ -94,6 +96,7 @@ Good for reading and writing, but as a safety - see above: no writing unless exp
 GetVolumeNameForVolumeMountPoint will find its volume GUID.
 
 Windows is already very picky about mounted volumes. You will likely need a shadow copy as a source.
+
 
 Shadow copies:
 	\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy...
@@ -106,9 +109,14 @@ GetVolumeNameForVolumeMountPoint will not work.
 QueryDosDevice might resolve drive letter, GetFinalPathNameByHandleW a mount point (reparse point).
 But I don't really want to get so involved.
 
+
 Files:
 	D:\Path\disk.img
 Surprisingly fitting for our goals. But the entire space has to be reserved in the file.
+
+Files do not support FSCTL_LOCK_VOLUME (whatever), but also no FSCTL_GET_VOLUME_DATA or FSCTL_GET_VOLUME_BITMAP,
+so we'll have to make exceptions in all these cases if we want to support files.
+
 
 PhysicalDrive and Partition objects:
 	\\.\PhysicalDrive0
@@ -116,30 +124,7 @@ PhysicalDrive and Partition objects:
 Not the same thing as volumes, and we are likely better off not messing with them.
 
 
-So the question is:
-- Is this a drive letter or a mount point?
-- Is this a volume GUID path?
-  Add trailing backslash.
-  Resolve to GUID path.		//This works even if it's already a GUID path.
-  Print all mount points.
-  Stop, unless there are none or --unmount is passed.
-
-- Is this a file?
-  Just open it in exclusive mode. No locking needed.
-
-- Is this something else? (VSS included)
-  Rely on our ability to open for writing, but maybe be a little bit more permissive about locking not working.
-  Or maybe add --no-lock-src --no-lock-dest. Though VSS locking works fine!
-
-
-You know what? Let's not be too smart. FSCTL_LOCK_VOLUME only works for volumes and VSS shadow copies.
-So try to resolve the volume to its GUID, and if it works, apply volume logic.
-
-Shadow copies are an exception. They will fail the GUID resolution but can still benefit from locking.
-So let's try this:
-1. Resolve to volume GUID? Mount point logic + enable FSCTL_LOCK_VOLUME.
-2. FSCTL_IS_VOLUME_MOUNTED? (Works for shadow copies) Enable FSCTL_LOCK_VOLUME.
-3. Otherwise do FSCTL_LOCK_VOLUME but do not check the result. Or maybe do check but there are different results for "cannot lock" and "wtf are you talking about"
+Let's try not to be too smart and to allow passing anything and then just try to work with it.
 */
 
 /*
@@ -225,7 +210,7 @@ bool verifyMountPoints(const std::string& volumePath, bool printMountPoints, boo
 }
 
 
-
+//Volume + its MFT.
 class Volume2 : public Volume {
 public:
 	Mft mft = { this };
@@ -391,20 +376,6 @@ int main2(int argc, char* argv[]) {
 		;
 */
 
-	bool bAllowMounted = false;
-	app.add_flag("--unsafe-allow-mounted", bAllowMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch. Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
-		->capture_default_str()
-		;
-
-	bool bAllowNonMatching = false;
-	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem like the clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
-		->capture_default_str()
-		;
-
-	bool bPrintDirtyFiles = false;
-	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "Print details on the MFT segments that are deemed dirty.")
-		->capture_default_str()
-		;
 
 	//We'll enforce FSCTL_LOCK_VOLUME where it seems reasonable and TRY it elsewhere.
 	//These flags force us to insist on it even if we're not sure it should work.
@@ -417,10 +388,32 @@ int main2(int argc, char* argv[]) {
 		->capture_default_str()
 		;
 
+	bool bAllowMounted = false;
+	app.add_flag("--unsafe-allow-mounted", bAllowMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch. Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
+		->capture_default_str()
+		;
+
+	bool bAllowNonMatching = false;
+	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem like the clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
+		->capture_default_str()
+		;
+
 	bool write_mode = false;
 	app.add_flag("--write", write_mode, "Write to destination. Without this flag we will not actually open the destination as writeable.")
 		->capture_default_str()
 		;
+
+
+	bool bPrintClustersAsRuns = true;
+	app.add_flag("--clusters-as-runs", bPrintClustersAsRuns, "For modes that print cluster lists, print cluster runs instead of individual clusters.")
+		->capture_default_str()
+		;
+
+	bool bPrintDirtyFiles = false;
+	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "Print details on the MFT segments that are deemed dirty.")
+		->capture_default_str()
+		;
+
 
 	bool verbose = false;
 	app.add_flag("--verbose", verbose, "Detailed logging.")
@@ -536,7 +529,7 @@ int main2(int argc, char* argv[]) {
 		for (auto& run : BitmapSpans(&srcDiff)) {
 			candidateClusterCount +=run.length;
 			if (action == DdAction::List)
-				std::cout << run.offset << "-" << run.offset+run.length << std::endl;
+				printClusterSpan(run.offset, run.length, bPrintClustersAsRuns);
 		}
 		std::cerr << "Candidate cluster count: " << candidateClusterCount << std::endl;
 
@@ -545,13 +538,25 @@ int main2(int argc, char* argv[]) {
 		auto t1 = GetTickCount();
 		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
 		std::cerr << (GetTickCount() - t1) << std::endl;
-
-		ClusterDiffComparer cldiff(src, dest);
-		t1 = GetTickCount();
-		cldiff.process(srcDiff);
-		std::cerr << (GetTickCount() - t1) << std::endl;
-		std::cerr << "Diff clusters: " << cldiff.stats.diffCount << std::endl;
 	}
+
+	if (action == DdAction::Copy) {
+		//TODO
+	}
+	else if (action == DdAction::Compare || action == DdAction::Rcw) {
+		std::unique_ptr<ClusterDiffComparer> cldiff;
+		if (action == DdAction::Rcw)
+			cldiff.reset(new ClusterDiffWriter(src, dest));
+		else
+			cldiff.reset(new ClusterDiffComparer(src, dest));
+		cldiff->printDiff = (action == DdAction::Compare);
+		cldiff->printClustersAsSpans = bPrintClustersAsRuns;
+		auto t1 = GetTickCount();
+		cldiff->process(srcDiff);
+		std::cerr << (GetTickCount() - t1) << std::endl;
+		std::cerr << "Diff clusters: " << cldiff->stats.diffCount << std::endl;
+	}
+
 
 	// Cleanup
 	return 0;
