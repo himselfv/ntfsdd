@@ -8,6 +8,42 @@ typedef int64_t SegmentNumber;
 typedef ULONGLONG LSN, *PLSN;
 
 
+//http://ntfs.com/ntfs-partition-boot-sector.htm
+//https://kcall.co.uk/ntfs/
+typedef struct BIOS_PARAMETER_BLOCK2 {
+	USHORT BytesPerSector;
+	UCHAR  SectorsPerCluster;
+	USHORT ReservedSectors;
+
+	UCHAR  Fats;               // Number of FATs         : always 0
+	USHORT RootEntries;        // Root directory entries : always 0
+	USHORT Sectors;            // Total logical sectors  : always 0
+	UCHAR  Media;              // Media descriptor
+	USHORT SectorsPerFat;
+
+	USHORT SectorsPerTrack;
+	USHORT Heads;              // Number of heads
+	ULONG  HiddenSectors;      // 
+
+	ULONG  LargeSectors;       // Large total logical sectors
+	ULONG  Unused2;
+	UINT64 TotalSectors;
+	UINT64 MftStartLcn;
+	UINT64 Mft2StartLcn;
+
+	UCHAR ClustersPerFileRecordSegment;	//Negative values mean powers of 2 in bytes.
+	UCHAR Unused3[3];
+
+	UCHAR ClustersPerIndexBuffer;
+	UCHAR Unused4[3];
+
+	UINT64 VolumeSerialNumber;
+	ULONG Checksum;
+} BIOS_PARAMETER_BLOCK2;
+
+
+
+
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
 typedef struct _MFT_SEGMENT_REFERENCE {
   ULONG  SegmentNumberLowPart;

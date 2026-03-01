@@ -110,6 +110,15 @@ QueryDosDevice might resolve drive letter, GetFinalPathNameByHandleW a mount poi
 But I don't really want to get so involved.
 
 
+VHDs:
+When loaded, behave more or less like normal volumes, but:
+- FSCTL_LOCK_VOLUME fails!
+Can be opened as files. Start with their disk data + footer.
+You can use --no-lock-*, but maybe its easier to access these as files.
+PROBLEM:
+- VHD is not a volume but a disk. It contains a partition + some number of partitions.
+
+
 Files:
 	D:\Path\disk.img
 Surprisingly fitting for our goals. But the entire space has to be reserved in the file.
@@ -388,8 +397,8 @@ int main2(int argc, char* argv[]) {
 		->capture_default_str()
 		;
 
-	bool bAllowMounted = false;
-	app.add_flag("--unsafe-allow-mounted", bAllowMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch. Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
+	bool bAllowWriteMounted = false;
+	app.add_flag("--unsafe-allow-mounted", bAllowWriteMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch. Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
 		->capture_default_str()
 		;
 
@@ -429,14 +438,17 @@ int main2(int argc, char* argv[]) {
 
 	CLI11_PARSE(app, argc, argv);
 
+
+	bool bNeedsWrites = (action == DdAction::Copy || action == DdAction::Rcw);
+
 	// Open Handles
 	bool srcIsVolume = verifyMountPoints(srcPath, verbose, false);
 	auto src = Volume2();
 	src.open(srcPath, GENERIC_READ);
 
-	bool destIsVolume = verifyMountPoints(destPath, verbose, !bAllowMounted);
+	bool destIsVolume = verifyMountPoints(destPath, verbose, bNeedsWrites && !bAllowWriteMounted);
 	DWORD dwDestMode = GENERIC_READ;
-//	if (write_mode && (action == DdAction::Copy || action == DdAction::Rcw))
+//	if (write_mode && bNeedsWrites)
 //		dwDestMode |= GENERIC_WRITE;
 	auto dest = Volume2();
 	dest.open(destPath, dwDestMode);

@@ -44,9 +44,9 @@ void Volume::open(const std::string& path, DWORD dwOpenMode)
 		throwLastOsError(std::string{ "Error opening " }+path + std::string{ ". Ensure you're running as Administrator." });
 
 	// Get Volume Geometry (to know cluster size)
-	DWORD bytesReturned;
-	this->ioctl(FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, &this->m_volumeData, sizeof(this->m_volumeData), &bytesReturned, NULL);
-	assert(bytesReturned == sizeof(this->m_volumeData));
+	this->readVolumeData(&this->m_volumeData);
+
+//	assert(this->queryVolumeData(&this->m_volumeData));
 
 	verifyNtfsVersion();
 }
@@ -111,16 +111,31 @@ BOOL Volume::read(
 	if (overlapped == nullptr)
 		overlapped = &this->m_overlapped;
 
-	if (ReadFile(this->m_h, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, overlapped))
-		return TRUE;
+	DWORD numberOfBytesRead;
+	auto ret = ReadFile(this->m_h, lpBuffer, nNumberOfBytesToRead, &numberOfBytesRead, overlapped);
 
-	auto err = GetLastError();
-	if (err != ERROR_IO_PENDING)
-		return FALSE;
+	if (!ret) {
+		auto err = GetLastError();
+		if (err != ERROR_IO_PENDING)
+			return FALSE;
 
-	if (lpOverlapped == nullptr)
-		return GetOverlappedResult(this->m_h, overlapped, lpNumberOfBytesRead, TRUE);
-	return TRUE;
+		//Custom overlapped => return w/o waiting
+		if (lpOverlapped != nullptr)
+			return TRUE;
+
+		//Blocking emulation => wait for results
+		ret = GetOverlappedResult(this->m_h, overlapped, &numberOfBytesRead, TRUE);
+	}
+
+	if (ret) { //Either from immediate or delayed result
+		if (lpNumberOfBytesRead)
+			*lpNumberOfBytesRead = numberOfBytesRead;
+
+		//Advance the offset to emulate what the file pointer does
+		(*(uint64_t*)(&(overlapped->Offset))) += numberOfBytesRead;
+	}
+
+	return ret;
 }
 
 BOOL Volume::getOverlappedResult(
@@ -141,6 +156,99 @@ void Volume::verifyNtfsVersion()
 	assert(extendedVolumeData().MinorVersion <= 1);
 }
 
+
+
+inline void __byteswap_ushort(USHORT& buf) {
+	buf = _byteswap_ushort(buf);
+}
+
+inline void __byteswap_ulong(ULONG& buf) {
+	buf = _byteswap_ulong(buf);
+}
+
+inline void __byteswap_uint64(UINT64& buf) {
+	buf = _byteswap_uint64(buf);
+}
+
+
+bool Volume::readVolumeData(CombinedVolumeData* data)
+{
+	assert(this->setFilePointer(LARGE_INTEGER{ 0 }));
+
+	BIOS_PARAMETER_BLOCK2 block;
+	assert(this->read(&block, sizeof(block), nullptr, nullptr));
+	__byteswap_ushort(block.BytesPerSector);
+	__byteswap_ushort(block.ReservedSectors);
+	__byteswap_ushort(block.RootEntries);
+	__byteswap_ushort(block.Sectors);
+	__byteswap_ushort(block.SectorsPerFat);
+	__byteswap_ushort(block.SectorsPerTrack);
+	__byteswap_ushort(block.Heads);
+	__byteswap_ulong(block.HiddenSectors);
+	__byteswap_ulong(block.LargeSectors);
+
+	__byteswap_uint64(block.TotalSectors);
+	__byteswap_uint64(block.MftStartLcn);
+	__byteswap_uint64(block.Mft2StartLcn);
+
+	__byteswap_ulong(block.ClustersPerFileRecordSegment);
+
+	__byteswap_uint64(block.VolumeSerialNumber);
+	__byteswap_ulong(block.Checksum);
+
+	auto& vd = data->volumeData;
+	vd.VolumeSerialNumber.QuadPart = block.VolumeSerialNumber;
+	vd.NumberSectors.QuadPart = block.TotalSectors;
+	assert(block.SectorsPerCluster != 0);
+	vd.TotalClusters.QuadPart = block.TotalSectors / block.SectorsPerCluster;
+	//LARGE_INTEGER FreeClusters;
+	//LARGE_INTEGER TotalReserved;
+	vd.BytesPerSector = block.BytesPerSector;
+	vd.BytesPerCluster = block.BytesPerSector*block.SectorsPerCluster;
+	vd.ClustersPerFileRecordSegment = block.ClustersPerFileRecordSegment;
+	assert(vd.ClustersPerFileRecordSegment != 0);
+	if ((int8_t)block.ClustersPerFileRecordSegment > 0)
+		vd.BytesPerFileRecordSegment = vd.BytesPerCluster * block.ClustersPerFileRecordSegment;
+	else //Negative values mean powers of 2, in bytes.
+		vd.BytesPerFileRecordSegment = 1UL << (-(int8_t)(block.ClustersPerFileRecordSegment));
+	//LARGE_INTEGER MftValidDataLength;
+	vd.MftStartLcn.QuadPart = block.MftStartLcn;
+	vd.Mft2StartLcn.QuadPart = block.Mft2StartLcn;
+	//LARGE_INTEGER MftZoneStart;
+	//LARGE_INTEGER MftZoneEnd;
+
+	this->m_volumeData.volumeData.BytesPerCluster = block.SectorsPerCluster*block.BytesPerSector;
+
+/*
+DWORD ByteCount;
+
+WORD   MajorVersion;
+WORD   MinorVersion;
+
+DWORD BytesPerPhysicalSector;
+
+WORD   LfsMajorVersion;
+WORD   LfsMinorVersion;
+
+The versioning information (e.g., v3.1 for Windows XP/7/10/11) is stored in the $Volume metadata file, which is MFT Record 3.
+Location: Access the volume at the MFT_Byte_Offset (calculated from the Boot Sector) and skip to the 4th record (record indices start at 0).
+Attribute: Look for the $VOLUME_INFORMATION attribute (Type Code 0x70) within that record.
+Data Structure: The version numbers are located at specific offsets within this attribute's data:
+Major Version: Offset 0x08 (1 byte).
+Minor Version: Offset 0x09 (1 byte).
+
+*/
+}
+
+/*
+WARNING! If passed a file handle doesn't fail but returns its parent volume params.
+*/
+bool Volume::queryVolumeData(CombinedVolumeData* data)
+{
+	DWORD bytesReturned;
+	OSCHECKBOOL(this->ioctl(FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, data, sizeof(*data), &bytesReturned, NULL));
+	assert(bytesReturned == sizeof(this->m_volumeData));
+}
 
 /*
 https://community.osr.com/t/locking-ntfs-volume-dismounts-it/16419/9

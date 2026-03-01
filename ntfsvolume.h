@@ -77,6 +77,11 @@ public:
 
 	void verifyNtfsVersion();
 
+	//Read* functions read the data directly
+	bool readVolumeData(CombinedVolumeData* data);
+
+	//Query* functions use FSCTL-type codes to ask this information from the system
+	bool queryVolumeData(CombinedVolumeData* data);
 	VOLUME_BITMAP_BUFFER* queryVolumeBitmap();
 };
 
