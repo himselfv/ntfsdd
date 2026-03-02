@@ -221,7 +221,7 @@ void BitmapSpans::Iterator::skip0s() {
 
 	//Finish the open word
 	uint64_t word = *ptr >> bit_offset;
-	while (bit_offset < BLOCK_BITS - 1 && (size_t)current.offset < size) {
+	while (bit_offset < BLOCK_BITS - 1 && (size_t)current.offset < size-1) { //size-1 because we'll bit-test AFTER increment
 		bit_offset++;
 		current.offset++;
 		word = word >> 1;
@@ -262,7 +262,7 @@ void BitmapSpans::Iterator::eat1s() {
 
 	//Finish the open word
 	uint64_t word = *ptr >> bit_offset;
-	while (bit_offset < BLOCK_BITS - 1 && current.length < remainingSize) {
+	while (bit_offset < BLOCK_BITS - 1 && current.length < remainingSize-1) { //size-1 because we'll bit-test AFTER increment
 		bit_offset++;
 		current.length++;
 		word = word >> 1;
@@ -280,9 +280,8 @@ void BitmapSpans::Iterator::eat1s() {
 	};
 
 	//Have to check before dereferencing ptr.
-	if (current.length >= remainingSize) {
+	if (current.length >= remainingSize)
 		return;
-	}
 
 	//Now do the non-0 block
 	word = *ptr;

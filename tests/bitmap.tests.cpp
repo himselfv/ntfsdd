@@ -77,4 +77,14 @@ TEST_CASE("Bitmap span all 1s", "[Bitmap]") {
 	CHECK(decoded.size() == 1);
 	CHECK(decoded[0].offset == 0);
 	CHECK(decoded[0].length == 4096);
+
+	bmp.resize(127);
+	bmp.set(0, 79);
+	bmp.clear(80, 126);
+	decoded.clear();
+	for (auto& run : BitmapSpans(&bmp))
+		decoded.push_back(run);
+	CHECK(decoded.size() == 1);
+	CHECK(decoded[0].offset == 0);
+	CHECK(decoded[0].length == 80);
 }

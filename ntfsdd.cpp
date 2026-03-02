@@ -389,14 +389,21 @@ int main2(int argc, char* argv[]) {
 		;
 
 	bool bAllowNonMatching = false;
-	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem like the clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
+	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem to be a clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
+		->capture_default_str()
+		;
+
+	//Separate flag for skipping MFT checks in copy all mode only, as there it sometimes makes sense.
+	bool bBlankOverwrite = false;
+	app.add_flag("--overwrite", bBlankOverwrite, "Overwrite destination completely. Skip destination format checks. Only works for action==copy, selection==all|bitmap. Without this copy all/bitmap will still check the destination MFT.")
 		->capture_default_str()
 		;
 
 	bool write_mode = false;
-	app.add_flag("--write", write_mode, "Write to destination. Without this flag we will not actually open the destination as writeable.")
+	app.add_flag("--write", write_mode, "Write to destination. Final safety. Without this flag we will not actually open the destination as writeable.")
 		->capture_default_str()
 		;
+
 
 
 	bool bPrintClustersAsRuns = true;
@@ -426,7 +433,9 @@ int main2(int argc, char* argv[]) {
 
 
 	bool bNeedsWrites = (action == DdAction::Copy || action == DdAction::Rcw);
-	bool bBlankTarget = (action == DdAction::Copy && mode == DdMode::All);
+
+	//Skip destination format checks.
+	bool bBlankTarget = (action == DdAction::Copy && (mode == DdMode::All||mode==DdMode::Bitmap)) && bBlankOverwrite;
 
 	// Open Handles
 	bool srcIsVolume = verifyMountPoints(srcPath, verbose, false);
@@ -437,8 +446,8 @@ int main2(int argc, char* argv[]) {
 
 	bool destIsVolume = verifyMountPoints(destPath, verbose, bNeedsWrites && !bAllowWriteMounted);
 	DWORD dwDestMode = GENERIC_READ;
-//	if (write_mode && bNeedsWrites)
-//		dwDestMode |= GENERIC_WRITE;
+	if (write_mode && bNeedsWrites)
+		dwDestMode |= GENERIC_WRITE;
 	auto dest = Volume2(destPath, dwDestMode);
 
 	//If we're in blind copy mode, we should not have to read the destination layout
