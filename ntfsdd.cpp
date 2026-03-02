@@ -223,21 +223,7 @@ bool verifyMountPoints(const std::string& volumePath, bool printMountPoints, boo
 class Volume2 : public Volume {
 public:
 	Mft mft = { this };
-
-	virtual void open(const std::string& path, DWORD dwOpenMode)
-	{
-		Volume::open(path, dwOpenMode);
-	}
-
-	virtual void close()
-	{
-		Volume::close();
-	}
-
-	void loadMftStructure() {
-		mft.loadMftStructure(this->volumeData().MftStartLcn.QuadPart);
-	}
-
+	using Volume::Volume;
 };
 
 void compareVolumeParams(Volume& a, Volume& b, bool safety_override)
@@ -343,7 +329,7 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 /*
 Safety: Проверяем, что наша карта кластеров для проверки содержит, как минимум, все те кластеры, которые *добавились* в более новом битмапе.
 */
-void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const BitmapBuf& newlyUsedClusters)
+void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const Bitmap& newlyUsedClusters)
 {
 	//Поскольку srcDiff это сам по себе Bitmap, то и тут можем обойтись удобной массовой операцией.
 	auto remainder = newlyUsedClusters.andNot(srcDiff);
@@ -440,25 +426,31 @@ int main2(int argc, char* argv[]) {
 
 
 	bool bNeedsWrites = (action == DdAction::Copy || action == DdAction::Rcw);
+	bool bBlankTarget = (action == DdAction::Copy && mode == DdMode::All);
 
 	// Open Handles
 	bool srcIsVolume = verifyMountPoints(srcPath, verbose, false);
-	auto src = Volume2();
-	src.open(srcPath, GENERIC_READ);
+	auto src = Volume2(srcPath, GENERIC_READ);
+	src.readLayout();
+	if (srcIsVolume)
+		src.verifyPhysicalVolumeParams();
 
 	bool destIsVolume = verifyMountPoints(destPath, verbose, bNeedsWrites && !bAllowWriteMounted);
 	DWORD dwDestMode = GENERIC_READ;
 //	if (write_mode && bNeedsWrites)
 //		dwDestMode |= GENERIC_WRITE;
-	auto dest = Volume2();
-	dest.open(destPath, dwDestMode);
+	auto dest = Volume2(destPath, dwDestMode);
 
-	if (verbose) {
-		std::cerr << "Source handle: " << src.h() << std::endl;
-		std::cerr << "Destination handle: " << dest.h() << std::endl;
+	//If we're in blind copy mode, we should not have to read the destination layout
+	if (bBlankTarget)
+		dest.initLayout(src.volumeData(), src.extendedVolumeData());
+	else {
+		dest.readLayout();
+		if (destIsVolume)
+			dest.verifyPhysicalVolumeParams();
+		compareVolumeParams(src, dest, bAllowNonMatching);
 	}
 
-	compareVolumeParams(src, dest, bAllowNonMatching);
 
 	// 2. Prepare Target (Lock and Dismount)
 	std::cerr << "Locking src..." << std::endl;
@@ -481,16 +473,22 @@ int main2(int argc, char* argv[]) {
 
 	// Open and scan MFT
 	std::cerr << "Loading MFT structures..." << std::endl;
-	src.loadMftStructure();
-	dest.loadMftStructure();
+	src.mft.load();
+	if (!bBlankTarget)
+		dest.mft.load();
+	else
+		dest.mft.loadMinimal();
 
 	std::cerr << "Loading stored bitmap..." << std::endl;
 	NtfsBitmapFile srcBitmap(&src, &src.mft);
-	NtfsBitmapFile destBitmap(&src, &src.mft);
+	std::unique_ptr<NtfsBitmapFile> destBitmap{ nullptr };
+	if (!bBlankTarget)
+		destBitmap.reset(new NtfsBitmapFile(&dest, &dest.mft));
 
 	std::cerr << "Verifying MFT layouts..." << std::endl;
 	verifyMftLayout(src, src.mft, srcBitmap.buf);
-	verifyMftLayout(dest, dest.mft, nullptr);
+	if (!bBlankTarget)
+		verifyMftLayout(dest, dest.mft, nullptr);
 
 	BitmapBuf srcUsed;
 	CandidateClusterMap srcDiff;
@@ -505,9 +503,11 @@ int main2(int argc, char* argv[]) {
 		auto t1 = GetTickCount();
 		switch (mode) {
 		case DdMode::All:
+			srcDiff.resize(src.volumeData().TotalClusters.QuadPart);
 			srcDiff.set(ClusterRun{ 0, src.volumeData().TotalClusters.QuadPart });
 			break;
 		case DdMode::Bitmap:
+			srcDiff.resize(src.volumeData().TotalClusters.QuadPart);
 			for (auto& run : BitmapSpans((uint64_t*)srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart))
 				srcDiff.set(run);
 			break;
@@ -548,12 +548,18 @@ int main2(int argc, char* argv[]) {
 		//Safety: Проверяем, что наш получившийся список содержит все кластеры srcBitmap, уникальные для него (т.е. перешедшие в состояние 1 с момента destBitmap)
 		//If $Bitmap shows a block was turned from free to used, warn and copy it, as that should not happen if I'm parsing MFT correctly.
 		auto t1 = GetTickCount();
-		verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap.asBitmap()));
+		if (bBlankTarget)
+			verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap());
+		else
+			verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
 		std::cerr << (GetTickCount() - t1) << std::endl;
 	}
 
 	if (action == DdAction::Copy) {
-		//TODO
+		ClusterCopier clcopy(src, dest);
+		auto t1 = GetTickCount();
+		clcopy.process(srcDiff);
+		std::cerr << (GetTickCount() - t1) << std::endl;
 	}
 	else if (action == DdAction::Compare || action == DdAction::Rcw) {
 		std::unique_ptr<ClusterDiffComparer> cldiff;
@@ -568,7 +574,6 @@ int main2(int argc, char* argv[]) {
 		std::cerr << (GetTickCount() - t1) << std::endl;
 		std::cerr << "Diff clusters: " << cldiff->stats.diffCount << std::endl;
 	}
-
 
 	// Cleanup
 	return 0;

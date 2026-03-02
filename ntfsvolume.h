@@ -29,6 +29,47 @@ public:
 };
 
 
+template <typename T>
+struct AlignedAllocator {
+	using value_type = T;
+	size_t alignment;
+	AlignedAllocator() : alignment(1) {}
+
+	template <typename U>
+	AlignedAllocator(const AlignedAllocator<U>& other) noexcept
+		: alignment(other.alignment) {}
+
+	void setAlignment(size_t align)
+	{
+		this->alignment = align;
+	}
+
+	T* allocate(size_t n) {
+		if (n == 0) return nullptr;
+		void* p;
+		if (alignment != 0 && alignment != 1)
+			p = _aligned_malloc(n * sizeof(T), alignment);
+		else
+			p = malloc(n * sizeof(T));
+		if (!p) throw std::bad_alloc();
+		return static_cast<T*>(p);
+	}
+
+	void deallocate(T* p, size_t) noexcept {
+		if (alignment != 0 && alignment != 1)
+			_aligned_free(p);
+		else
+			free(p);
+	}
+
+	// Necessary for vector to compare allocators
+	bool operator==(const AlignedAllocator& other) const { return alignment == other.alignment; }
+	bool operator!=(const AlignedAllocator& other) const { return !(*this == other); }
+};
+
+using AlignedBuffer = std::vector<uint8_t, AlignedAllocator<uint8_t>>;
+
+
 #pragma pack(push, 1)
 struct CombinedVolumeData {
 	NTFS_VOLUME_DATA_BUFFER volumeData;
@@ -47,11 +88,46 @@ public:
 	inline NTFS_VOLUME_DATA_BUFFER& volumeData() { return this->m_volumeData.volumeData; }
 	inline NTFS_EXTENDED_VOLUME_DATA& extendedVolumeData() { return this->m_volumeData.extendedVolumeData; }
 
+protected:
+	int32_t PhysicalSectorSize = 0; //override if you dare
+	AlignedAllocator<uint8_t> m_allocator;
 public:
+	inline int32_t physicalSectorSize() { return PhysicalSectorSize;  }
+	void setPhysicalSectorSize(int32_t size);
+	AlignedBuffer newAlignedBuffer(size_t desiredSize);
+
+
+public:
+	Volume(const std::string& path, DWORD dwOpenMode);
 	virtual ~Volume();
 
-	virtual void open(const std::string& path, DWORD dwOpenMode);
-	virtual void close();
+	/*
+	To work with the volume, certain details about its layout and sector and cluster sizes are needed.
+	These either have to be read from the volume, or initialized (for empty volumes).
+	*/
+	virtual void readLayout();
+	void verifyNtfsVersion();
+	void queryPhysicalVolumeParams();
+	void verifyPhysicalVolumeParams();
+
+	/*
+	Initializes our in-memory understanding of the volume's layout based on the desired data provided.
+	We're not going to write this to the volume! You'll have to handle this separately, by copying the clusters.
+	*/
+	virtual void initLayout(const NTFS_VOLUME_DATA_BUFFER& volumeData, const NTFS_EXTENDED_VOLUME_DATA& extData);
+
+
+public:
+	//Read* functions read the data directly
+	void readVolumeData(NTFS_VOLUME_DATA_BUFFER* volData, NTFS_EXTENDED_VOLUME_DATA* extData);
+
+	//Query* functions use FSCTL-type codes to ask this information from the system
+	bool queryVolumeData(CombinedVolumeData* data);
+	VOLUME_BITMAP_BUFFER* queryVolumeBitmap();
+
+	bool queryStorageAlignment(STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR* result);
+
+public:
 	BOOL ioctl(_In_ DWORD dwIoControlCode,
 		_In_reads_bytes_opt_(nInBufferSize) LPVOID lpInBuffer,
 		_In_ DWORD nInBufferSize,
@@ -62,6 +138,9 @@ public:
 	);
 	BOOL setFilePointer(
 		_In_ LARGE_INTEGER liDistanceToMove
+	);
+	BOOL setFilePointer(
+		_In_ uint64_t liDistanceToMove
 	);
 	BOOL read(
 		_Out_writes_bytes_to_opt_(nNumberOfBytesToRead, *lpNumberOfBytesRead) __out_data_source(FILE) LPVOID lpBuffer,
@@ -74,15 +153,6 @@ public:
 		_Out_ LPDWORD lpNumberOfBytesTransferred,
 		_In_ BOOL bWait
 	);
-
-	void verifyNtfsVersion();
-
-	//Read* functions read the data directly
-	bool readVolumeData(CombinedVolumeData* data);
-
-	//Query* functions use FSCTL-type codes to ask this information from the system
-	bool queryVolumeData(CombinedVolumeData* data);
-	VOLUME_BITMAP_BUFFER* queryVolumeBitmap();
 };
 
 

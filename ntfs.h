@@ -4,13 +4,18 @@
 typedef LONGLONG VCN;
 typedef VCN *PVCN;
 typedef LONGLONG LCN;
-typedef int64_t SegmentNumber;
+typedef LONGLONG SegmentNumber;
 typedef ULONGLONG LSN, *PLSN;
 
 
 //http://ntfs.com/ntfs-partition-boot-sector.htm
 //https://kcall.co.uk/ntfs/
-typedef struct BIOS_PARAMETER_BLOCK2 {
+//https://thestarman.pcministry.com/asm/mbr/NTFSBR.htm#BPB
+#pragma pack(push, 1)
+typedef struct BIOS_PARAMETER_BLOCK {
+	UCHAR  JumpInstruction[3];
+	UCHAR  OEMID[8]; //"NTFS    "
+
 	USHORT BytesPerSector;
 	UCHAR  SectorsPerCluster;
 	USHORT ReservedSectors;
@@ -39,8 +44,18 @@ typedef struct BIOS_PARAMETER_BLOCK2 {
 
 	UINT64 VolumeSerialNumber;
 	ULONG Checksum;
-} BIOS_PARAMETER_BLOCK2;
+/*
+None of this is needed:
+	bool decodeAndTestChecksum();
+	void decodeByteOrder();
+	void encodeByteOrder();
+*/
+} BIOS_PARAMETER_BLOCK;
+#pragma pack(pop)
 
+static constexpr USHORT BIOS_PARAMETER_BLOCK_SIZE_FOR_CHECKSUM = 0x80;
+
+//ULONG BpbChecksum(void* buf);
 
 
 
@@ -161,6 +176,9 @@ typedef struct _ATTRIBUTE_RECORD_HEADER {
 			LONGLONG TotalAllocated;
 		} Nonresident;
 	} Form;
+	inline char* ResidentValuePtr() {
+		return (char*)this + this->Form.Resident.ValueOffset;
+	};
 } ATTRIBUTE_RECORD_HEADER, *PATTRIBUTE_RECORD_HEADER;
 
 //
@@ -343,3 +361,16 @@ typedef FILE_NAME *PFILE_NAME;
 #define NtfsFileNameSize(PFN) (                             \
     (sizeof( FILE_NAME ) + ((PFN)->FileNameLength - 1) * 2) \
 )
+
+#pragma pack(push, 1)
+typedef struct _VOLUME_INFORMATION {
+	LONGLONG Reserved;
+	UCHAR MajorVersion;                                             //  offset = 0x000
+	UCHAR MinorVersion;                                             //  offset = 0x001
+	USHORT VolumeFlags;                                             //  offset = 0x002
+} VOLUME_INFORMATION;                                               //  sizeof = 0x004
+typedef VOLUME_INFORMATION *PVOLUME_INFORMATION;
+#pragma pack(pop)
+
+#define VOLUME_DIRTY                     (0x0001)
+#define VOLUME_RESIZE_LOG_FILE           (0x0002)

@@ -74,6 +74,7 @@ public:
 public:
 	Mft(Volume* volume);
 
+	void loadMinimal();
 	void load();
 	void loadMftStructure(LCN lcnFirst);
 
@@ -84,8 +85,9 @@ public:
 	void readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment);
 	void readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count);
 	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPOVERLAPPED lpOverlapped = nullptr);
-	void processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count);
-	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header);
+	void processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count, int* validCount = nullptr);
+	static bool IsValidSegment(FILE_RECORD_SEGMENT_HEADER* segment);
+	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* segment);
 
 	inline bool isValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
 		return (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE")); };

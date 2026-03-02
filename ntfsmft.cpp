@@ -62,18 +62,26 @@ Mft::Mft(Volume* volume)
 	vol = volume;
 }
 
-void Mft::load()
-{
-	loadMftStructure(vol->volumeData().MftStartLcn.QuadPart);
-}
 
-void Mft::loadMftStructure(LCN lcnFirst)
+//Actual loading has to take place after the source Volume figures out its layout.
+//Minimal loading allows us to read arbitrary segments in the first few clusters.
+//Full loading does some additional integrity checks.
+void Mft::loadMinimal()
 {
 	// Pre-calculate and verify some values
 	assert(vol->volumeData().BytesPerFileRecordSegment % vol->volumeData().BytesPerSector == 0, "MFT segment size is not a multiple of logical sector size!");
 	this->SectorsPerFileSegment = vol->volumeData().BytesPerFileRecordSegment / vol->volumeData().BytesPerSector;
 	this->BytesPerFileSegment = vol->volumeData().BytesPerFileRecordSegment;
+}
 
+void Mft::load()
+{
+	this->loadMinimal();
+	loadMftStructure(vol->volumeData().MftStartLcn.QuadPart);
+}
+
+void Mft::loadMftStructure(LCN lcnFirst)
+{
 	auto segment = newSegmentBuf();
 	readSegmentLcn(lcnFirst, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
 	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
@@ -114,14 +122,8 @@ std::vector<char> Mft::newSegmentBuf()
 
 void Mft::readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* segment)
 {
-	//Сегмент может занимать несколько кластеров, тогда читаем, начиная с кластера.
-	if (vol->volumeData().ClustersPerFileRecordSegment > 0)
-		return this->readSegmentLcn(segmentIndex / vol->volumeData().ClustersPerFileRecordSegment, segment);
-
 	auto BytesPerCluster = vol->volumeData().BytesPerCluster;
 
-	//Иначе сегмент занимает меньше кластера.
-	//Нам нужно посчитать его VBN (virtual byte number) и поделить с остатком.
 	VRBN vrbn;
 	vrbn.QuadPart = segmentIndex * BytesPerFileSegment;
 	VCN vcn = vrbn.QuadPart / BytesPerCluster;
@@ -157,28 +159,36 @@ void Mft::readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPO
 }
 
 
-void Mft::processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count)
+void Mft::processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count, int* validCount)
 {
 	while (count > 0) {
 		//So apparently records can be uninitialized. These appear closer to the end of the MFT.
 		bool isValidSegment = (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
 
 		//Apply fixups
-		if (isValidSegment)
+		if (isValidSegment) {
 			this->segmentApplyFixups(segment);
+			if (validCount != nullptr)
+				(*validCount)++;
+		}
 
 		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + BytesPerFileSegment);
 		count--;
 	}
 }
 
-void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* header)
+bool Mft::IsValidSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 {
-	auto fixupCnt = header->MultiSectorHeader.UpdateSequenceArraySize - 1; //1 additional cell is for the UpdateValueNumber
+	return (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
+}
+
+void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	auto fixupCnt = segment->MultiSectorHeader.UpdateSequenceArraySize - 1; //1 additional cell is for the UpdateValueNumber
 	assert(fixupCnt == this->SectorsPerFileSegment);
 
-	auto fixup = (uint16_t*)((char*)header + header->MultiSectorHeader.UpdateSequenceArrayOffset);
-	auto pos = (char*)header + vol->volumeData().BytesPerSector - 2;
+	auto fixup = (uint16_t*)((char*)segment + segment->MultiSectorHeader.UpdateSequenceArrayOffset);
+	auto pos = (char*)segment + vol->volumeData().BytesPerSector - 2;
 	auto magic = *(fixup++);
 	while (fixupCnt > 0) {
 		assert(*((uint16_t*)pos) == magic, "Invalid fixup in FILE segment.");

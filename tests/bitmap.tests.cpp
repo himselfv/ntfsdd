@@ -64,3 +64,17 @@ TEST_CASE("Bitmap ops", "[Bitmap]") {
 	CHECK(!xor.get(33));
 	CHECK(xor.bitCount() == 24);
 }
+
+TEST_CASE("Bitmap span all 1s", "[Bitmap]") {
+	BitmapBuf bmp;
+	bmp.resize(4096);
+	bmp.set(0, 4095);
+
+	std::vector<ClusterRun> decoded;
+	for (auto& run : BitmapSpans(&bmp))
+		decoded.push_back(run);
+
+	CHECK(decoded.size() == 1);
+	CHECK(decoded[0].offset == 0);
+	CHECK(decoded[0].length == 4096);
+}

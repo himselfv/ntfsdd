@@ -1,5 +1,7 @@
 #pragma once
 #include "ntfsvolume.h"
+#include "ntfsmft.h"
+#include <memory>
 
 VolumeLock::VolumeLock(Volume& volume, bool ignoreErrors)
 	: volume(&volume)
@@ -27,14 +29,8 @@ VolumeLock::~VolumeLock()
 	}
 }
 
-Volume::~Volume() {
-	this->close();
-}
-
-void Volume::open(const std::string& path, DWORD dwOpenMode)
+Volume::Volume(const std::string& path, DWORD dwOpenMode)
 {
-	this->close();
-
 	this->m_path = path;
 	std::cerr << "Opening " << path << "..." << std::endl;
 
@@ -42,22 +38,16 @@ void Volume::open(const std::string& path, DWORD dwOpenMode)
 	this->m_h = CreateFileA(path.c_str(), dwOpenMode, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
 	if (this->m_h == INVALID_HANDLE_VALUE)
 		throwLastOsError(std::string{ "Error opening " }+path + std::string{ ". Ensure you're running as Administrator." });
-
-	// Get Volume Geometry (to know cluster size)
-	this->readVolumeData(&this->m_volumeData);
-
-//	assert(this->queryVolumeData(&this->m_volumeData));
-
-	verifyNtfsVersion();
 }
 
-void Volume::close()
+Volume::~Volume()
 {
 	if (this->m_h != INVALID_HANDLE_VALUE) {
 		CloseHandle(this->m_h);
 		this->m_h = INVALID_HANDLE_VALUE;
 	}
 }
+
 
 /*
 Все функции, которые принимают overlapped, будут работать и если его не передать.
@@ -100,6 +90,16 @@ BOOL Volume::setFilePointer(
 	return TRUE;
 }
 
+BOOL Volume::setFilePointer(
+	_In_ uint64_t liDistanceToMove
+)
+{
+	this->m_overlapped.Offset = (uint32_t)liDistanceToMove;
+	this->m_overlapped.OffsetHigh = (uint32_t)(liDistanceToMove << (sizeof(uint32_t)*8));
+	return TRUE;
+}
+
+
 BOOL Volume::read(
 	_Out_writes_bytes_to_opt_(nNumberOfBytesToRead, *lpNumberOfBytesRead) __out_data_source(FILE) LPVOID lpBuffer,
 	_In_ DWORD nNumberOfBytesToRead,
@@ -138,6 +138,7 @@ BOOL Volume::read(
 	return ret;
 }
 
+
 BOOL Volume::getOverlappedResult(
 	_In_ LPOVERLAPPED lpOverlapped,
 	_Out_ LPDWORD lpNumberOfBytesTransferred,
@@ -149,54 +150,165 @@ BOOL Volume::getOverlappedResult(
 
 
 
+/*
+Volume Data strategy:
+We have three cases to cover:
+1. Sometimes we can do both valid FSCTL_QUERY_VOLUME_DATA and manual reading.
+2. Or we can only do manual reading (files) and FSCTL_QUERY_VOLUME_DATA will fail OR return garbage.
+  We have limited options on distinguishing the latter cases here.
+3. Or we cannot and should not do any of that (blanket copy to empty partition/file).
+
+The best would be to read manually, but then we lack certain fields, e.g. physical sector size.
+Frankly, sometimes PhysicalSectorSize from FSCTL_QUERY_VOLUME_DATA is also fake and it would be nice to be able to override it.
+But at least that's a starting point.
+
+So regarding PhysicalSectorSize, we have to cache it and allow overriding.
+We have to ignore what's in EXTENDED_VOLUME_DATA apart from using it as the initial value.
+Our algorithm should be:
+1. Read manually. (We won't have PhysicalSectorSize). Use logical sector as physical guess.
+2. FSCTL_QUERY_VOLUME_DATA. If failed, NBD. If succeeded:
+- If the target is a file, ignore the results. Windows returns results for its host volume.
+- If it's a volume, maybe compare the results? Though allow to override and skip this. Many ways to go wrong.
+- Update PhysicalSectorSize in any case. If it's a file, it's that file's host volume's physical sector size which is good.
+3. Let the caller override our PhysicalSectorSize.
+
+Special case: blank copying.
+We cannot read any data from the volume but we still have to provide some data.
+
+The only real things are 1. The max number of everything available. 2. Desired cluster sizes etc.
+Perhaps we can have two different functions:
+1. readVolumeData.
+2. initVolumeData(VolumeData source)
+*/
+
+void Volume::readLayout()
+{
+	// Query volume data, but only so that we can steal PhysicalSectorSize from there
+	this->queryPhysicalVolumeParams();
+
+	// Get Volume Geometry (to know cluster size)
+	this->readVolumeData(&this->m_volumeData.volumeData, &this->m_volumeData.extendedVolumeData);
+	this->PhysicalSectorSize = this->m_volumeData.extendedVolumeData.BytesPerPhysicalSector;
+
+	verifyNtfsVersion();
+}
+
 void Volume::verifyNtfsVersion()
 {
+	/*
+	Let's be very conservative in the types of NTFS that we handle.
+	As we test against other versions we'll expand this list.
+	*/
 	assert(extendedVolumeData().MajorVersion == 3);
 	assert(extendedVolumeData().MinorVersion >= 0);
 	assert(extendedVolumeData().MinorVersion <= 1);
 }
 
-
-
-inline void __byteswap_ushort(USHORT& buf) {
-	buf = _byteswap_ushort(buf);
-}
-
-inline void __byteswap_ulong(ULONG& buf) {
-	buf = _byteswap_ulong(buf);
-}
-
-inline void __byteswap_uint64(UINT64& buf) {
-	buf = _byteswap_uint64(buf);
-}
-
-
-bool Volume::readVolumeData(CombinedVolumeData* data)
+/*
+If the caller is certain it's working with the volume the system recognizes and not with data in a file,
+it can request us to verify that our manually read layout matches the system understanding of things.
+*/
+void Volume::verifyPhysicalVolumeParams()
 {
-	assert(this->setFilePointer(LARGE_INTEGER{ 0 }));
+	CombinedVolumeData hostVolumeData{};
+	if (!this->queryVolumeData(&hostVolumeData))
+		throwLastOsError("FSCTL_GET_NTFS_VOLUME_PARAMS");
 
-	BIOS_PARAMETER_BLOCK2 block;
-	assert(this->read(&block, sizeof(block), nullptr, nullptr));
-	__byteswap_ushort(block.BytesPerSector);
-	__byteswap_ushort(block.ReservedSectors);
-	__byteswap_ushort(block.RootEntries);
-	__byteswap_ushort(block.Sectors);
-	__byteswap_ushort(block.SectorsPerFat);
-	__byteswap_ushort(block.SectorsPerTrack);
-	__byteswap_ushort(block.Heads);
-	__byteswap_ulong(block.HiddenSectors);
-	__byteswap_ulong(block.LargeSectors);
+	auto& vd = this->volumeData();
+	auto& hvd = hostVolumeData.volumeData;
 
-	__byteswap_uint64(block.TotalSectors);
-	__byteswap_uint64(block.MftStartLcn);
-	__byteswap_uint64(block.Mft2StartLcn);
+	//We're only comparing those fields that we load
+	assert(vd.BytesPerCluster == hvd.BytesPerCluster);
+	assert(vd.BytesPerFileRecordSegment == hvd.BytesPerFileRecordSegment);
+	assert(vd.BytesPerSector == hvd.BytesPerSector);
+	assert(vd.ClustersPerFileRecordSegment = hvd.ClustersPerFileRecordSegment);
+	assert(vd.MftStartLcn.QuadPart == hvd.MftStartLcn.QuadPart);
+	assert(vd.Mft2StartLcn.QuadPart == hvd.Mft2StartLcn.QuadPart);
+	assert(vd.MftValidDataLength.QuadPart == hvd.MftValidDataLength.QuadPart);
+	assert(vd.NumberSectors.QuadPart == hvd.NumberSectors.QuadPart);
+	assert(vd.TotalClusters.QuadPart == hvd.TotalClusters.QuadPart);
+	assert(vd.VolumeSerialNumber.QuadPart == hvd.VolumeSerialNumber.QuadPart);
+}
 
-	__byteswap_ulong(block.ClustersPerFileRecordSegment);
 
-	__byteswap_uint64(block.VolumeSerialNumber);
-	__byteswap_ulong(block.Checksum);
 
-	auto& vd = data->volumeData;
+/*
+Initializes our in-memory understanding of the volume's layout based on the desired data provided.
+We're not going to write this to the volume! You'll have to handle this separately, by copying the clusters.
+*/
+void Volume::initLayout(const NTFS_VOLUME_DATA_BUFFER& volumeData, const NTFS_EXTENDED_VOLUME_DATA& extData)
+{
+	this->queryPhysicalVolumeParams();
+
+	this->m_volumeData.volumeData = volumeData;
+	this->m_volumeData.extendedVolumeData = extData;
+
+	if (this->PhysicalSectorSize < extData.BytesPerPhysicalSector)
+		this->PhysicalSectorSize = extData.BytesPerPhysicalSector;
+}
+
+
+
+void Volume::setPhysicalSectorSize(int32_t size)
+{
+	this->PhysicalSectorSize = size;
+	this->m_allocator.setAlignment(size);
+}
+
+AlignedBuffer Volume::newAlignedBuffer(size_t desiredSize)
+{
+	if (desiredSize % this->PhysicalSectorSize != 0)
+		desiredSize = desiredSize + this->PhysicalSectorSize - (desiredSize % this->PhysicalSectorSize);
+	auto ret = AlignedBuffer(m_allocator);
+	ret.resize(desiredSize);
+	return ret;
+}
+
+
+/*
+The volume we're working with may be stored on some physical volume, either as a partition or as file.
+We want to query the host volume's PhysicalSectorSize and maybe some other params.
+*/
+void Volume::queryPhysicalVolumeParams()
+{
+	this->PhysicalSectorSize = 0;
+
+	//In Windows, the same call returns the host volume info, including some physical storage info,
+	//whether we hold the volume itself or the file on it.
+	CombinedVolumeData hostVolumeData{};
+	if (this->queryVolumeData(&hostVolumeData)) {
+		this->PhysicalSectorSize = hostVolumeData.extendedVolumeData.BytesPerPhysicalSector;
+		return;
+	}
+
+	//Another way to maybe get the PhysicalSectorSize. Though if the previous one failed this will likely also fail.
+	STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR alignment = {};
+	if (this->queryStorageAlignment(&alignment))
+		this->PhysicalSectorSize = alignment.BytesPerPhysicalSector;
+
+	//We can either leave 0/1 in PhysicalSectorSize, or choose say 512 as a default. Idk.
+	//0/1 is better because we'll catch alignment errors.
+}
+
+
+
+void Volume::readVolumeData(NTFS_VOLUME_DATA_BUFFER* volData, NTFS_EXTENDED_VOLUME_DATA* extData)
+{
+	DWORD bytesReturned = 0;
+
+	//If we're dealing with a live volume, our buffers have to be aligned on the sector size
+	auto buffer = this->newAlignedBuffer(sizeof(BIOS_PARAMETER_BLOCK));
+
+	OSCHECKBOOL(this->setFilePointer( 0 ));
+	OSCHECKBOOL(this->read(&buffer[0], (DWORD)buffer.size(), &bytesReturned, nullptr));
+	assert(bytesReturned == buffer.size());
+
+	auto& block = *(BIOS_PARAMETER_BLOCK*)(&buffer[0]);
+//	assert(block.decodeAndTestChecksum()); //Not needed!
+
+	memset(volData, 0, sizeof(*volData));
+	auto& vd = *volData;
+
 	vd.VolumeSerialNumber.QuadPart = block.VolumeSerialNumber;
 	vd.NumberSectors.QuadPart = block.TotalSectors;
 	assert(block.SectorsPerCluster != 0);
@@ -205,39 +317,68 @@ bool Volume::readVolumeData(CombinedVolumeData* data)
 	//LARGE_INTEGER TotalReserved;
 	vd.BytesPerSector = block.BytesPerSector;
 	vd.BytesPerCluster = block.BytesPerSector*block.SectorsPerCluster;
-	vd.ClustersPerFileRecordSegment = block.ClustersPerFileRecordSegment;
-	assert(vd.ClustersPerFileRecordSegment != 0);
-	if ((int8_t)block.ClustersPerFileRecordSegment > 0)
+	assert((int8_t)block.ClustersPerFileRecordSegment != 0);
+	if ((int8_t)block.ClustersPerFileRecordSegment > 0) {
 		vd.BytesPerFileRecordSegment = vd.BytesPerCluster * block.ClustersPerFileRecordSegment;
-	else //Negative values mean powers of 2, in bytes.
+		vd.ClustersPerFileRecordSegment = block.ClustersPerFileRecordSegment;
+	}
+	else { //Negative values mean powers of 2, in bytes.
 		vd.BytesPerFileRecordSegment = 1UL << (-(int8_t)(block.ClustersPerFileRecordSegment));
+		vd.ClustersPerFileRecordSegment = 0;
+	}
 	//LARGE_INTEGER MftValidDataLength;
 	vd.MftStartLcn.QuadPart = block.MftStartLcn;
 	vd.Mft2StartLcn.QuadPart = block.Mft2StartLcn;
 	//LARGE_INTEGER MftZoneStart;
 	//LARGE_INTEGER MftZoneEnd;
 
-	this->m_volumeData.volumeData.BytesPerCluster = block.SectorsPerCluster*block.BytesPerSector;
 
-/*
-DWORD ByteCount;
+	//To read MftValidDataLength we have to access record 0 of the MFT
+	//Ntfs version is in record 3
+	auto mftBytes = this->newAlignedBuffer(vd.BytesPerFileRecordSegment * 4);
 
-WORD   MajorVersion;
-WORD   MinorVersion;
+	OSCHECKBOOL(this->setFilePointer( 0 + vd.MftStartLcn.QuadPart*vd.BytesPerCluster ));
+	OSCHECKBOOL(this->read(&mftBytes[0], (DWORD)mftBytes.size(), &bytesReturned, nullptr));
+	assert(bytesReturned == mftBytes.size());
+	auto segment = (FILE_RECORD_SEGMENT_HEADER*)(&mftBytes[0]);
 
-DWORD BytesPerPhysicalSector;
+	//Spin up minimal MFT processing
+	//We need this to check FILE signatures, apply fixups etc.
+	int validCount = 0;
+	Mft minimalMft(this);
+	minimalMft.loadMinimal();
+	minimalMft.processSegments(segment, 4, &validCount);
+	assert(validCount == 4);
 
-WORD   LfsMajorVersion;
-WORD   LfsMinorVersion;
+	vd.MftValidDataLength.QuadPart = 0;
+	for (auto& attr : AttributeIterator(segment))
+		if (attr.TypeCode == $DATA) {
+			assert(attr.FormCode == NONRESIDENT_FORM);
+			vd.MftValidDataLength.QuadPart = attr.Form.Nonresident.ValidDataLength;
+			break;
+		}
+	assert(vd.MftValidDataLength.QuadPart != 0);
 
-The versioning information (e.g., v3.1 for Windows XP/7/10/11) is stored in the $Volume metadata file, which is MFT Record 3.
-Location: Access the volume at the MFT_Byte_Offset (calculated from the Boot Sector) and skip to the 4th record (record indices start at 0).
-Attribute: Look for the $VOLUME_INFORMATION attribute (Type Code 0x70) within that record.
-Data Structure: The version numbers are located at specific offsets within this attribute's data:
-Major Version: Offset 0x08 (1 byte).
-Minor Version: Offset 0x09 (1 byte).
+	if (extData == nullptr) return;
+	memset(extData, 0, sizeof(*extData));
+	extData->ByteCount = sizeof(*extData); //The extent of the data we cover here
 
-*/
+	segment = (FILE_RECORD_SEGMENT_HEADER*)(&mftBytes[vd.BytesPerFileRecordSegment * 3]);
+	VOLUME_INFORMATION* volumeInfo = nullptr;
+	for (auto& attr : AttributeIterator(segment))
+		if (attr.TypeCode == $VOLUME_INFORMATION) {
+			assert(attr.FormCode == RESIDENT_FORM);
+			assert(attr.Form.Resident.ValueLength >= sizeof(VOLUME_INFORMATION));
+			volumeInfo = (VOLUME_INFORMATION*)(attr.ResidentValuePtr());
+			break;
+		}
+	assert(volumeInfo != nullptr);
+	extData->MajorVersion = volumeInfo->MajorVersion;
+	extData->MinorVersion = volumeInfo->MinorVersion;
+
+	//We don't know bytes per physical sector here.
+	//This is really problematic but let's at least put something in it.
+	extData->BytesPerPhysicalSector = volData->BytesPerSector;
 }
 
 /*
@@ -246,8 +387,29 @@ WARNING! If passed a file handle doesn't fail but returns its parent volume para
 bool Volume::queryVolumeData(CombinedVolumeData* data)
 {
 	DWORD bytesReturned;
-	OSCHECKBOOL(this->ioctl(FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, data, sizeof(*data), &bytesReturned, NULL));
-	assert(bytesReturned == sizeof(this->m_volumeData));
+	auto ret = this->ioctl(FSCTL_GET_NTFS_VOLUME_DATA, NULL, 0, data, sizeof(*data), &bytesReturned, NULL);
+	if (ret)
+		assert(bytesReturned == sizeof(CombinedVolumeData));
+	return (ret!=FALSE);
+}
+
+bool Volume::queryStorageAlignment(STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR* alignment)
+{
+	DWORD bytesReturned = 0;
+
+	STORAGE_PROPERTY_QUERY query = {};
+	query.PropertyId = StorageAccessAlignmentProperty;
+	query.QueryType = PropertyStandardQuery;
+	if (this->ioctl(IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query),
+		alignment, sizeof(*alignment),
+		&bytesReturned, nullptr))
+		return true;
+
+	//This is supposed to be working from Vista/Server 2008 but I couldn't get it to work in 10.
+	auto err = GetLastError();
+	if (err != ERROR_INVALID_FUNCTION)
+		throwOsError(err);
+	return false;
 }
 
 /*

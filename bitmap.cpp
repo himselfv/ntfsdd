@@ -213,6 +213,10 @@ void BitmapSpans::Iterator::skip0s() {
 	if (!this->ptr) return;
 	current.offset += current.length; //Roll the previous length into the position.
 	current.length = 0;
+	if (current.offset >= size) {
+		this->ptr = nullptr;
+		return;
+	}
 	size_t bit_offset = current.offset % BLOCK_BITS;
 
 	//Finish the open word
@@ -277,7 +281,6 @@ void BitmapSpans::Iterator::eat1s() {
 
 	//Have to check before dereferencing ptr.
 	if (current.length >= remainingSize) {
-		this->ptr = nullptr;
 		return;
 	}
 
@@ -288,6 +291,6 @@ void BitmapSpans::Iterator::eat1s() {
 		word = word >> 1;
 	}
 	if (current.length >= remainingSize)
-		this->ptr = nullptr;
+		return;
 }
 
