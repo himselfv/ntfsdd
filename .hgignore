@@ -8,4 +8,4 @@ x64
 *.db
 *.opendb
 *.user
-ExternalDependencies.props
+Requirements.props
