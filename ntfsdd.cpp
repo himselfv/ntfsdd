@@ -16,26 +16,77 @@
 
 
 template<typename Enum>
+struct EnumItemInfo {
+	Enum value;
+	std::string name;
+	std::string desc;
+};
+
+template<typename Enum>
 struct EnumNames {};
-template<typename Enum, decltype(EnumNames<Enum>::map)* names = nullptr>
+
+template<typename Enum, decltype(EnumNames<Enum>::info)* names = nullptr>
+inline
+std::map<std::string, Enum> enumMap() {
+	std::map<std::string, Enum> result {};
+	for (auto& info : EnumNames<Enum>::info())
+		result.emplace(info.name, info.value);
+	return result;
+}
+
+template<typename Enum, decltype(EnumNames<Enum>::info)* names = nullptr>
 inline
 std::string enumName(Enum value) {
-	for (auto& pair : EnumNames<Enum>::map())
-		if (pair.second == value) return pair.first;
+	for (auto& pair : EnumNames<Enum>::info())
+		if (pair.value == value) return pair.name;
 	return std::string{};
 }
+
+template<typename Enum, decltype(EnumNames<Enum>::info)* names = nullptr>
+inline
+std::string enumNames(const std::string& separator) {
+	std::string result = {};
+	for (auto& pair : EnumNames<Enum>::info())
+		result += pair.name + separator;
+	result.resize(result.size() - separator.size());
+	return result;
+}
+
+template<typename Enum, decltype(EnumNames<Enum>::info)* names = nullptr>
+inline
+std::string enumDescriptions(const std::string& separator) {
+	std::string result = {};
+	for (auto& pair : EnumNames<Enum>::info())
+		result += pair.desc + separator;
+	result.resize(result.size() - separator.size());
+	return result;
+}
+
+template<typename Enum, decltype(EnumNames<Enum>::info)* names = nullptr>
+inline
+std::string enumNameDesc(const std::string& nameDescSeparator, const std::string& itemSeparator) {
+	std::string result = {};
+	for (auto& pair : EnumNames<Enum>::info())
+		result += pair.name + nameDescSeparator + pair.desc + itemSeparator;
+	result.resize(result.size() - itemSeparator.size());
+	return result;
+}
+
+
+
+
 
 
 enum class DdAction : int { List, Compare, Copy, Rcw, VerifyBitmap };
 template<> struct EnumNames<DdAction> {
-	typedef std::map<std::string, DdAction> Map;
-	static const Map map() {
-		static const Map m{
-			{ "list", DdAction::List },			//List candidate sectors
-			{ "compare", DdAction::Compare },	//Compare candidate sectors and print the differences
-			{ "copy", DdAction::Copy },			//Copy all candidate sectors
-			{ "rcw", DdAction::Rcw },			//Compare candidate sectors and copy the changed ones
-			{ "verifyBitmap", DdAction::VerifyBitmap },	//Rebuild $Bitmap from MFT and compare to the actual one.
+	typedef std::vector<EnumItemInfo<DdAction>> Info;
+	static const Info info() {
+		static const Info m{
+			{ DdAction::List,	 "list",	"List candidate sectors" },
+			{ DdAction::Compare, "compare",	"Compare candidate sectors and print the differences"  },
+			{ DdAction::Copy,	 "copy",	"Copy all candidate sectors"  },
+			{ DdAction::Rcw,	 "rcw",		"Compare candidate sectors and copy the changed ones"  },
+			{ DdAction::VerifyBitmap, "verifyBitmap", "Rebuild $Bitmap from MFT and compare to the actual one"  },
 		};
 		return m;
 	}
@@ -46,12 +97,12 @@ std::ostream& operator<<(std::ostream &os, const DdAction &value) {
 
 enum class DdMode : int { All, Bitmap, MFT };
 template<> struct EnumNames<DdMode> {
-	typedef std::map<std::string, DdMode> Map;
-	static const Map map() {
-		const Map m{
-			{ "all", DdMode::All },			//All sectors
-			{ "bitmap", DdMode::Bitmap },	//All sectors in use at source according to $Bitmap
-			{ "mft", DdMode::MFT },			//All sectors in use at source according to MFT segments that differ from destination
+	typedef std::vector<EnumItemInfo<DdMode>> Info;
+	static const Info info() {
+		const Info m{
+			{ DdMode::All,	  "all",		"All clusters" },
+			{ DdMode::Bitmap, "bitmap",		"All clusters in use at source according to $Bitmap"  },
+			{ DdMode::MFT,	  "mft",		"All sectors in use at source according to MFT segments that differ from destination"  },
 		};
 		return m;
 	}
@@ -63,12 +114,12 @@ std::ostream& operator<<(std::ostream &os, const DdMode &value) {
 /*
 enum class DdTrim : int { None, Changes, All };
 template<> struct EnumNames<DdTrim> {
-	typedef std::map<std::string, DdTrim> Map;
-	static const Map map() {
-		const Map m{
-			{ "none", DdTrim::None },
-			{ "changes", DdTrim::Changes },
-			{ "all", DdTrim::All },
+	typedef std::vector<EnumItemInfo<DdMode>> Info;
+	static const Info info() {
+		const Info m{
+			{ DdTrim::None, "none", "" },
+			{ DdTrim::Changes, "changes", "" },
+			{ DdTrim::All, "all", "" },
 		};
 		return m;
 	}
@@ -340,23 +391,28 @@ void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const Bitmap& n
 
 
 int main2(int argc, char* argv[]) {
-	CLI::App app{ "NTFS Rapid Delta dd", "ntfsdd" };
-
-	std::string srcPath, destPath;
-	app.add_option("source", srcPath, "Source device/file")->required();
-	app.add_option("target", destPath, "Target device/file")->required();
+	CLI::App app{ };
+	app.name("ntfsdd");
+	app.description(R"(NTFS Disk Destroyer.
+Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
+	app.get_formatter()->column_width(10);
+//	app.get_formatter()->enable_description_formatting(false);
+	app.get_formatter()->description_paragraph_width(100);
 
 	DdAction action{ DdAction::Compare };
-	app.add_option("--action", action, "Action to take")
-		->type_name("list|verify|copy|rcw")
-		->transform(CLI::CheckedTransformer(EnumNames<DdAction>::map(), CLI::ignore_case).description(""))
+	app.add_option("action, --action", action, "Action to take:\n  "+ enumNameDesc<DdAction>(":\t", "\n  "))
+		->group("Main options")
+		//->type_name("list|compare|copy|rcw")
+		->type_name(enumNames<DdAction>("|"))
+		->transform(CLI::CheckedTransformer(enumMap<DdAction>(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
 
 	DdMode mode{ DdMode::MFT };
-	app.add_option("--mode", mode, "Method to use")
-		->type_name("all|bitmap|mft")
-		->transform(CLI::CheckedTransformer(EnumNames<DdMode>::map(), CLI::ignore_case).description(""))
+	app.add_option("select, --select, --mode", mode, "Selection method to use:\n " + enumNameDesc<DdMode>(":\t", "\n  "))
+		->group("Main options")
+		->type_name(enumNames<DdMode>("|"))
+		->transform(CLI::CheckedTransformer(enumMap<DdMode>(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
 
@@ -364,43 +420,57 @@ int main2(int argc, char* argv[]) {
 	Do you really want us messing with trim? No, you don't. Do defrag /retrim from time to time.
 
 	DdTrim trim{ (DdTrim)(-1) };
-	app.add_option("--trim", trim, "Trim unused sectors")
+	app.add_option("--trim", trim, "Trim unused sectors:\n "+enumNameDesc<DdTrim>(":\t", "\n  "))
+		->group("Main options")
 		->type_name("none|changes|all")
-		->transform(CLI::CheckedTransformer(EnumNames<DdTrim>::map(), CLI::ignore_case).description(""))
+		->transform(CLI::CheckedTransformer(enumMap<DdTrim>(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
 */
 
+	std::string srcPath, destPath;
+	app.add_option("source, --source", srcPath, "Source device/file")
+		->group("Main options")
+		->required();
+	app.add_option("destination, --dest", destPath, "Target device/file")
+		->group("Main options")
+		->required();
 
 	//We'll enforce FSCTL_LOCK_VOLUME where it seems reasonable and TRY it elsewhere.
 	//These flags force us to insist on it even if we're not sure it should work.
 	bool bForceLockSrc = false;
 	bool bForceLockDest = false;
 	app.add_flag("--force-lock-src", bForceLockSrc, "Force FSCTL_LOCK_VOLUME on the source even when it doesn't seem to be a volume.")
+		->group("Access options")
 		->capture_default_str()
 		;
 	app.add_flag("--force-lock-dest", bForceLockDest, "Force FSCTL_LOCK_VOLUME on the destination even when it doesn't seem to be a volume.")
+		->group("Access options")
 		->capture_default_str()
 		;
 
 	bool bAllowWriteMounted = false;
-	app.add_flag("--unsafe-allow-mounted", bAllowWriteMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch. Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
+	app.add_flag("--unsafe-allow-mounted", bAllowWriteMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch.\nOnly write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
+		->group("Access options")
 		->capture_default_str()
 		;
 
 	bool bAllowNonMatching = false;
 	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem to be a clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
+		->group("Access options")
 		->capture_default_str()
 		;
 
 	//Separate flag for skipping MFT checks in copy all mode only, as there it sometimes makes sense.
 	bool bBlankOverwrite = false;
 	app.add_flag("--overwrite", bBlankOverwrite, "Overwrite destination completely. Skip destination format checks. Only works for action==copy, selection==all|bitmap. Without this copy all/bitmap will still check the destination MFT.")
+		->group("Access options")
 		->capture_default_str()
 		;
 
 	bool write_mode = false;
 	app.add_flag("--write", write_mode, "Write to destination. Final safety. Without this flag we will not actually open the destination as writeable.")
+		->group("Access options")
 		->capture_default_str()
 		;
 
@@ -408,26 +478,22 @@ int main2(int argc, char* argv[]) {
 
 	bool bPrintClustersAsRuns = true;
 	app.add_flag("--clusters-as-runs", bPrintClustersAsRuns, "For modes that print cluster lists, print cluster runs instead of individual clusters.")
+		->group("Output options")
 		->capture_default_str()
 		;
 
 	bool bPrintDirtyFiles = false;
 	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "Print details on the MFT segments that are deemed dirty.")
+		->group("Output options")
 		->capture_default_str()
 		;
 
 
 	bool verbose = false;
 	app.add_flag("--verbose", verbose, "Detailed logging.")
+		->group("Output options")
 		->capture_default_str()
 		;
-
-/*
-	Not implemented yet.
-
-	std::vector<SegmentNumber> skipSegments {};
-	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers");
-*/
 
 	CLI11_PARSE(app, argc, argv);
 
