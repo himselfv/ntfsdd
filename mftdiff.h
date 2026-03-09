@@ -5,6 +5,7 @@ to be checked for differences.
 */
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include "bitmap.h"
 #include "ntfsmft.h"
 
@@ -43,14 +44,13 @@ struct DiffStats {
 };
 
 struct FileEntry {
-	bool dirty = false;
+	bool dirty = false; //If set, include this file's clusters.
+	bool skip = false; //If set, ignore this file; do not include its clusters.
+	bool multisegment = false; //Multisegment file detected
+	bool filenameNtfs = false;
 	std::vector<ClusterRun> runList;
-};
-
-struct ShortFileInfo {
 	std::string filename{};
 	LCN totalClusters = 0;
-	bool skip = false; //If set, ignore this file; do not include its clusters nor its mft segments.
 };
 
 /*
@@ -61,15 +61,41 @@ class MftDiff {
 public:
 	Mft& mftSrc;
 	Mft& mftDest;
+
 	DiffStats stats;
+
+	//Populated during the scan
 	BitmapBuf srcUsed;
-	bool printDirtyFiles = false;
 	CandidateClusterMap srcDiff;
+
+	/*
+	Add files (segments) to mark them for skipping or force-copying.
+	On exit, contains entries for some of the files processed, including any explicitly requested by flags below.
+	*/
 	std::unordered_map<int64_t, FileEntry> filemap;
+
+	//If set, on exit filemap will include all files with dirty segments
+	bool filemapListDirty = false;
+
+	//If set, $FILENAME attributes will be processed and added to entries in the filemap
+	bool filemapNeedNames = false;
+	bool printDirtyFiles = false;
+
+	/*
+	Skip cluster listing/comparison/copying for these particular MFT segments.
+	The MFT segments itself will still be copied. The file will be of correct size, pointing at correct (updated) cluster numbers.
+	But the contents will be skipped, so the copy will point to random junk left there.
+
+	Warning: Very limited application. Mostly for hiberfil.sys.
+		Data leak risk.
+	Determine the segment numbers for your file with "fsutil file layout" or by listing changed files w/this tool.
+	*/
+	void skipSegments(const std::unordered_set<SegmentNumber>& segments);
 
 public:
 	MftDiff(Mft& mftSrc, Mft& mftDest);
+	void verifyMftRunsCompatible();
 	void scan();
 	virtual void onProgress(SegmentNumber idx, SegmentNumber totalSegments);
-	virtual void onDirtyFile(const ShortFileInfo& fi);
+	virtual void onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi);
 };

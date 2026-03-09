@@ -74,9 +74,6 @@ std::string enumNameDesc(const std::string& nameDescSeparator, const std::string
 
 
 
-
-
-
 enum class DdAction : int { List, Compare, Copy, Rcw, VerifyBitmap };
 template<> struct EnumNames<DdAction> {
 	typedef std::vector<EnumItemInfo<DdAction>> Info;
@@ -164,10 +161,10 @@ But I don't really want to get so involved.
 VHDs:
 When loaded, behave more or less like normal volumes, but:
 - FSCTL_LOCK_VOLUME fails!
-Can be opened as files. Start with their disk data + footer.
+Can be opened as files. Contain raw disk data + footer.
 You can use --no-lock-*, but maybe its easier to access these as files.
 PROBLEM:
-- VHD is not a volume but a disk. It contains a partition + some number of partitions.
+- VHD is not a volume but a disk. It contains the partition table + some number of partitions.
 
 
 Files:
@@ -475,6 +472,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 
+	std::unordered_set<SegmentNumber> skipSegments{};
+	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.");
+
 
 	bool bPrintClustersAsRuns = true;
 	app.add_flag("--clusters-as-runs", bPrintClustersAsRuns, "For modes that print cluster lists, print cluster runs instead of individual clusters.")
@@ -589,6 +589,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		case DdMode::MFT: {
 			std::cerr << "Reading MFT segments..." << std::endl;
 			MftDiff diff(src.mft, dest.mft);
+			diff.skipSegments(skipSegments);
 			diff.printDirtyFiles = bPrintDirtyFiles;
 			diff.scan();
 			srcDiff = std::move(diff.srcDiff);
@@ -647,7 +648,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		auto t1 = GetTickCount();
 		cldiff->process(srcDiff);
 		std::cerr << (GetTickCount() - t1) << std::endl;
-		std::cerr << "Diff clusters: " << cldiff->stats.diffCount << std::endl;
+		std::cerr << "Diff clusters: " << cldiff->stats.clustersDiffCount << std::endl;
 	}
 
 	// Cleanup
