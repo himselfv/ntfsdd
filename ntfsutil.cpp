@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include "ntfs.h"
+#include "ntfsutil.h"
 
 /*
 LCN runs in nonresident attributes are variable-sized, from 1 to 15 bytes in length (in practice 8 bytes should be more than enough).
@@ -35,3 +36,34 @@ int64_t ReadUnsignedValue(const uint8_t* buffer, size_t size) {
 	}
 	return value;
 }
+
+
+ProgressCallback::~ProgressCallback()
+{
+}
+
+void ProgressCallback::setMax(uint64_t value)
+{
+	this->m_max = value;
+}
+
+void ProgressCallback::setOnceEvery(uint64_t value)
+{
+	this->m_onceEvery = value;
+}
+
+void ProgressCallback::progress_int(uint64_t value)
+{
+}
+
+SimpleConsoleProgressCallback::SimpleConsoleProgressCallback(std::string&& operationName)
+	: m_operationName(operationName)
+{
+}
+
+void SimpleConsoleProgressCallback::progress_int(uint64_t value)
+{
+	std::cerr << value << " / " << this->m_max << std::endl;
+}
+
+

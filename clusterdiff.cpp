@@ -4,6 +4,22 @@
 #include "ntfsmft.h"
 
 
+
+void printClusterSpan(LCN lcnFirst, LCN len, bool printClustersAsSpans)
+{
+	if (printClustersAsSpans)
+		std::cout << lcnFirst << ":" << len << std::endl;
+	else {
+		while (len > 0) {
+			std::cout << lcnFirst << std::endl;
+			len--;
+			lcnFirst++;
+		}
+	}
+}
+
+
+
 ClusterProcessor::ClusterProcessor(Volume& src, Volume& dest)
 	: src(src), dest(dest)
 {
@@ -59,7 +75,7 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 		assert(bytesRead == bytesRead2);
 		assert(offset == offset2);
 		
-		stats.runsChecked++;
+		stats.spansChecked++;
 
 		LCN lcn = offset / BytesPerCluster;
 		LCN lastClean = lcn - 1;
@@ -68,7 +84,7 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 		while (bytesRead > 0) {
 			auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
 			if (diff != 0) {
-				stats.diffCount++;
+				stats.clustersDiffCount++;
 				this->onDirty(lcn, srcPtr);
 			}
 			else {
@@ -103,7 +119,7 @@ void ClusterDiffComparer::onProgress(LCN lcn)
 	}
 
 	int64_t thisClusterCount = this->stats.clustersChecked - this->m_progress_prevStats.clustersChecked;
-	int64_t thisRunCount = this->stats.runsChecked - this->m_progress_prevStats.runsChecked;
+	int64_t thisRunCount = this->stats.spansChecked - this->m_progress_prevStats.spansChecked;
 	auto t2 = GetTickCount() - this->m_progress_tm + 1; //To avoid div by zero.
 	this->m_progress_tm += t2;
 
@@ -119,19 +135,6 @@ void ClusterDiffComparer::onDirtySpan(LCN lcnFirst, LCN len, void* data)
 {
 	if (this->printDiff)
 		printClusterSpan(lcnFirst, len, this->printClustersAsSpans);
-}
-
-void printClusterSpan(LCN lcnFirst, LCN len, bool printClustersAsSpans)
-{
-	if (printClustersAsSpans)
-		std::cout << lcnFirst << ":" << len << std::endl;
-	else {
-		while (len > 0) {
-			std::cout << lcnFirst << std::endl;
-			len--;
-			lcnFirst++;
-		}
-	}
 }
 
 
@@ -192,7 +195,7 @@ void ClusterCopier::process(CandidateClusterMap& srcDiff)
 		assert(offset % BytesPerCluster == 0);
 		assert(bytesRead % BytesPerCluster == 0);
 
-		stats.runsChecked++;
+		stats.spansChecked++;
 
 		LCN lcn = offset / BytesPerCluster;
 		LCN lastClean = lcn - 1;

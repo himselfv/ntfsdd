@@ -36,6 +36,32 @@ inline void throwLastOsError(const std::string& message) {
 
 
 
+class ProgressCallback {
+protected:
+	uint64_t m_max = 0;
+	uint64_t m_lastCall = 0;
+	uint64_t m_onceEvery = 1;
+	virtual void progress_int(uint64_t value);
+public:
+	virtual ~ProgressCallback();
+	virtual void setMax(uint64_t value);
+	void setOnceEvery(uint64_t value);
+	inline void progress(uint64_t value, bool force) {
+		if ((value >= this->m_lastCall + this->m_onceEvery) || force)
+			this->progress_int(value);
+	}
+};
+
+class SimpleConsoleProgressCallback : public ProgressCallback {
+protected:
+	std::string m_operationName;
+public:
+	SimpleConsoleProgressCallback(std::string&& operationName);
+	virtual void progress_int(uint64_t value);
+};
+
+
+
 class AttributeIterator {
 public:
 	struct Iterator {

@@ -33,9 +33,9 @@ public:
 
 
 struct ClusterDiffStats {
-	LCN diffCount = 0;
+	int64_t spansChecked = 0;
 	LCN clustersChecked = 0;
-	int64_t runsChecked = 0;
+	LCN clustersDiffCount = 0;
 };
 
 /*

@@ -100,35 +100,36 @@ Compares the clusters matching the selection criteria and prints the cluster num
 
 
 ## Unmounting
-As a safety measure, the tool requires your destination volume to not have any mount points. This is to prevent accidental wiping of unintended volumes. It is advised to NOT dismount your destination automatically via script, as that negates the safety. Instead,
-1. If that's a one-shot copy, dismount the volume manually making sure you have dismounted the correct DriveLetter.
+As a safety measure the tool requires your destination volume to not have any mount points. This is to prevent accidental wiping of unintended volumes. It is advised to NOT dismount your destination automatically via script, as that negates the safety. Instead,
+
+1. For a one-shot copy, dismount the volume manually. Make sure you have dismounted the correct DriveLetter.
 2. If you're doing regular scripted updates, keep the target free of mount points permanently.
 
-As that doesn't cover all possible use cases, you're free to do otherwise of course. --unsafe-allow-mounted disables this check.
+You're free to do otherwise of course. ``--unsafe-allow-mounted`` disables this check.
 
 
 ## Cloning
-This tool can be used for cloning, even though it's main use is comparsion and updates. "copy all" will perform a forensic clone (all clusters) and "copy bitmap" will only copy the clusters used (recommended). In both cases, and especially after "copy all", defrag /Retrim is advised after clone.
+The tool can be used for cloning. "``copy all``" will perform a forensic clone (all clusters) and "``copy bitmap``" will only copy the clusters used (recommended). In both cases, and especially after "``copy all``", defrag /Retrim is advised after clone.
 
-When doing a full clone as a safety measure you have to pass ``--overwrite``. No checks against the destination volume layout and MFT will be made.
+When doing a full clone as a safety measure you have to pass ``--overwrite``. No checks against the destination volume layout and MFT will then be made.
 
 
 ## Imaging and restoration
-You can pass files both as source and as destination. So you can image volumes, update and restore those images. The file has to exist:
+You can pass files both as source and as destination. This way you can image volumes, update and restore those images. The file has to exist:
 ```
 type nul >filename.img
 ```
 
-Note that "copy all" will produce a file equivalent to the source in size. "copy bitmap" might produce a smaller file as final empty unused sectors will not be copied. This may confuse some tools, or it might be fine, IDK. You'll also likely will not be able to "copy all" from that file and will have to restore it with "copy bitmap".
+Note that "copy all" will produce a file equivalent to the source in size. "copy bitmap" might produce a smaller file as final empty unused sectors will not be copied. This may confuse some tools, IDK. You'll also likely will not be able to "copy all" from that file and will have to restore it with "copy bitmap".
 To prevent this, pre-fill the file with zeroes.
 
-HOW TO CREATE SMALL NTFS VOLUMES IN FILES W/VARIOUS PARAMS:
-Disk management MMC.
-Create virtual disk (VHD). VHDs are stored almost as is, only with additional footer. But we need partitions, not the entire disk.
-Create NTFS partitions w/different cluster sizes.
-fsutil volume list
-dd if=\\.\{GUID} of=volumeName.img
-Make sure it's \\.\ and not \\?\.
+#### HOW TO CREATE SMALL NTFS VOLUMES IN FILES W/VARIOUS PARAMS:
+* Disk management MMC.
+* Create virtual disk (VHD). VHDs are stored almost as is, only with additional footer. But we need partitions, not the entire disk.
+* Create NTFS partitions w/different cluster sizes.
+* ```fsutil volume list```
+* ```dd if=\\.\{GUID} of=volumeName.img```
+* Make sure it's \\.\ and not \\?\.
 
 
 ## VSS
@@ -156,7 +157,12 @@ With regular and limited updates I think you can even retrim only occasionally, 
 
 
 
+## NTFS version support
+I wrote this for my own uses, so I enabled NTFS versions on which I could have checked this. If you need other NTFS versions supported, send me something. 
+
 
 ## Building
 Compiles with MSVC2015/C++14.
 All requirements are in Requirements.example.props, rename and provide local paths.
+
+There are some tests, write more.
