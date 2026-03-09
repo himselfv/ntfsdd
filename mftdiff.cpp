@@ -175,9 +175,10 @@ void MftDiff::scan()
 			segmentEntry = &filemap[segmentNo];
 		} else {
 			auto it = filemap.find(segmentNo);
-			if (it == filemap.end())
+			if (it == filemap.end()) {
 				segmentEntry = &tempSegmentEntry;
-			else
+				segmentEntry->reset();
+			} else
 				segmentEntry = &it->second;
 		}
 
@@ -186,7 +187,6 @@ void MftDiff::scan()
 
 
 		//Перебираем атрибуты.
-		bool filenameNtfs = false;
 		for (auto& attr : AttributeIterator(&(*srcIt))) {
 			if (attr.TypeCode == $FILE_NAME && dirty && filemapNeedNames)
 				filenameReader.updateEntry(attr, segmentEntry);

@@ -9,3 +9,5 @@ x64
 *.opendb
 *.user
 Requirements.props
+data/
+__readme.txt

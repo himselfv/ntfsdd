@@ -85,25 +85,18 @@ void Mft::loadMftStructure(LCN lcnFirst)
 	auto segment = newSegmentBuf();
 	readSegmentLcn(lcnFirst, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
 	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
-	std::cerr << "Sector: " << header->SequenceNumber << " " << header->BaseFileRecordSegment.SegmentNumberLowPart << " " << header->Flags << " " << header->FirstAttributeOffset << std::endl;
 
 	//Read attributes
 	ATTRIBUTE_RECORD_HEADER* attrData = nullptr;
 	for (auto& attr : AttributeIterator(header)) {
-		std::cerr << "Attr: " << attr.TypeCode << std::endl;
 		if (attr.TypeCode == $DATA) {
-			if (!attrData) attrData = &attr;
+			assert(!attrData);
+			attrData = &attr;
 		}
-		if (attr.FormCode == RESIDENT_FORM)
-			std::cerr << "  Resident: " << attr.Form.Resident.ValueLength << std::endl;
-		else
-			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE))
-				std::cerr << "  Run: " << run.offset << ":" << run.length << std::endl;
 		assert(attr.TypeCode != $ATTRIBUTE_LIST); //Не поддерживаем $ATTRIBUTE_LIST в MFT!
 	}
 	assert(attrData != nullptr);
 	assert(attrData->FormCode == NONRESIDENT_FORM);
-	std::cerr << "$Data: " << attrData->Form.Nonresident.LowestVcn << " " << attrData->Form.Nonresident.HighestVcn << std::endl;
 	assert(attrData->Form.Nonresident.LowestVcn == 0); //Поскольку $ATTRIBUTE_LIST не поддерживаем, то тут должен быть единственный атрибут, закрывающий весь VCN.
 	this->addAttr(attrData);
 

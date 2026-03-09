@@ -476,8 +476,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.");
 
 
-	bool bPrintClustersAsRuns = true;
-	app.add_flag("--clusters-as-runs", bPrintClustersAsRuns, "For modes that print cluster lists, print cluster runs instead of individual clusters.")
+	bool bPrintClustersAsSpans = true;
+	app.add_flag("--clusters-as-spans", bPrintClustersAsSpans, "For modes that print cluster lists, print cluster spans instead of individual clusters.")
 		->group("Output options")
 		->capture_default_str()
 		;
@@ -591,6 +591,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
 			diff.printDirtyFiles = bPrintDirtyFiles;
+			diff.filemapNeedNames = bPrintDirtyFiles;
 			diff.scan();
 			srcDiff = std::move(diff.srcDiff);
 			std::cerr << "Used segments: " << diff.stats.usedSegments << std::endl;
@@ -617,7 +618,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		for (auto& run : BitmapSpans(&srcDiff)) {
 			candidateClusterCount +=run.length;
 			if (action == DdAction::List)
-				printClusterSpan(run.offset, run.length, bPrintClustersAsRuns);
+				printClusterSpan(run.offset, run.length, bPrintClustersAsSpans);
 		}
 		std::cerr << "Candidate cluster count: " << candidateClusterCount << std::endl;
 
@@ -644,7 +645,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		else
 			cldiff.reset(new ClusterDiffComparer(src, dest));
 		cldiff->printDiff = (action == DdAction::Compare);
-		cldiff->printClustersAsSpans = bPrintClustersAsRuns;
+		cldiff->printClustersAsSpans = bPrintClustersAsSpans;
 		auto t1 = GetTickCount();
 		cldiff->process(srcDiff);
 		std::cerr << (GetTickCount() - t1) << std::endl;

@@ -48,9 +48,18 @@ struct FileEntry {
 	bool skip = false; //If set, ignore this file; do not include its clusters.
 	bool multisegment = false; //Multisegment file detected
 	bool filenameNtfs = false;
-	std::vector<ClusterRun> runList;
 	std::string filename{};
+	std::vector<ClusterRun> runList;
 	LCN totalClusters = 0;
+	void reset() {
+		this->dirty = false;
+		this->skip = false;
+		this->multisegment = false;
+		this->filenameNtfs = false;
+		this->filename.clear();
+		this->runList.clear();
+		this->totalClusters = 0;
+	}
 };
 
 /*
