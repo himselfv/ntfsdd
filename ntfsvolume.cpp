@@ -221,7 +221,7 @@ void Volume::verifyPhysicalVolumeParams()
 	assert(vd.BytesPerCluster == hvd.BytesPerCluster);
 	assert(vd.BytesPerFileRecordSegment == hvd.BytesPerFileRecordSegment);
 	assert(vd.BytesPerSector == hvd.BytesPerSector);
-	assert(vd.ClustersPerFileRecordSegment = hvd.ClustersPerFileRecordSegment);
+	assert(vd.ClustersPerFileRecordSegment == hvd.ClustersPerFileRecordSegment);
 	assert(vd.MftStartLcn.QuadPart == hvd.MftStartLcn.QuadPart);
 	assert(vd.Mft2StartLcn.QuadPart == hvd.Mft2StartLcn.QuadPart);
 	assert(vd.MftValidDataLength.QuadPart == hvd.MftValidDataLength.QuadPart);
