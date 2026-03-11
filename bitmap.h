@@ -25,10 +25,13 @@ private:
 	template <typename Op64>
 	void apply_operation1(Op64 op64);
 	template <typename Op64>
+	void apply_operation1(Op64 op64, size_t first, size_t last);
+	template <typename Op64>
 	void apply_operation3(const Bitmap& other, Bitmap& result, Op64 op64) const;
 
 public:
 	size_t bitCount() const;
+	size_t bitCount(size_t first, size_t last) const;
 	bool isZero() const;
 	BitmapBuf andNot(const Bitmap& other) const;
 	void andNot(const Bitmap& other, Bitmap& result) const;

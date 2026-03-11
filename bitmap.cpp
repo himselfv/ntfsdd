@@ -74,11 +74,54 @@ int64_t Bitmap::memcmp(const void* bitmap1, const void* bitmap2, size_t bitcnt, 
 template <typename Op64>
 void Bitmap::apply_operation1(Op64 op64)
 {
-	uint64_t* srcA = this->data;	
+	uint64_t* srcA = this->data;
 	size_t rem = this->size;
-	while (rem > sizeof(*srcA) * 8) {
+	while (rem > BLOCK_BITS) {
 		if (!op64(srcA)) break;
-		rem -= sizeof(*srcA) * 8;
+		rem -= BLOCK_BITS;
+		srcA++;
+	}
+	if (rem > 0) {
+		uint64_t tmpA = *srcA & ~(~0ULL << rem);
+		uint64_t tmpA2 = tmpA;
+		op64(&tmpA2);
+		if (tmpA2 != tmpA)
+			*srcA = (*srcA & (~0ULL << rem)) | (tmpA2 & ~(~0ULL << rem));
+	}
+}
+
+template <typename Op64>
+void Bitmap::apply_operation1(Op64 op64, size_t first, size_t last)
+{
+	size_t skip = first / BLOCK_BITS;
+	uint64_t* srcA = this->data + skip;
+
+	first -= skip * BLOCK_BITS;
+	last -= skip * BLOCK_BITS;
+
+	if (first <= 0) {
+	} else if (last < BLOCK_BITS) {
+		uint64_t tmpA = *srcA & (~0ULL << first) & ~(~0ULL << (last+1));
+		uint64_t tmpA2 = tmpA;
+		op64(&tmpA2);
+		if (tmpA2 != tmpA)
+			*srcA = (*srcA & ~(~0ULL << first) & ~(~0ULL << (last+1))) | (tmpA2 & (~0ULL << first) & ~(~0ULL << (last+1)));
+		srcA++;
+		first = last + 1;
+	} else {
+		uint64_t tmpA = *srcA & (~0ULL << first);
+		uint64_t tmpA2 = tmpA;
+		op64(&tmpA2);
+		if (tmpA2 != tmpA)
+			*srcA = (*srcA & ~(~0ULL << first)) | (tmpA2 & (~0ULL << first));
+		srcA++;
+		first = BLOCK_BITS;
+	}
+
+	size_t rem = last - first + 1;
+	while (rem > BLOCK_BITS) {
+		if (!op64(srcA)) break;
+		rem -= BLOCK_BITS;
 		srcA++;
 	}
 	if (rem > 0) {
@@ -123,6 +166,18 @@ size_t Bitmap::bitCount() const
 		);
 	return result;
 }
+
+size_t Bitmap::bitCount(size_t first, size_t last) const
+{
+	size_t result = 0;
+	const_cast<Bitmap*>(this)->apply_operation1(
+		[&result](uint64_t* ptr) { result += __popcnt64(*ptr); return true; },
+		first,
+		last
+	);
+	return result;
+}
+
 
 bool Bitmap::isZero() const
 {

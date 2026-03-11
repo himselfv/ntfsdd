@@ -476,6 +476,14 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.");
 
 
+	//In List mode, this is going to print *selected* files. In Compare, the files with actual *differences* (interspersed with clusters)
+	//Note that this will not print DELETED files. The comparison is one-way.
+	bool bPrintDirtyClusters = true;
+	app.add_flag("--print-dirty-clusters", bPrintDirtyClusters, "In List and Compare modes, print selected and matching clusters respectively.")
+		->group("Output options")
+		->capture_default_str()
+		;
+
 	bool bPrintClustersAsSpans = true;
 	app.add_flag("--clusters-as-spans", bPrintClustersAsSpans, "For modes that print cluster lists, print cluster spans instead of individual clusters.")
 		->group("Output options")
@@ -483,10 +491,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 	bool bPrintDirtyFiles = false;
-	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "Print details on the MFT segments that are deemed dirty.")
+	app.add_flag("--print-dirty-files", bPrintDirtyFiles, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
 		->group("Output options")
 		->capture_default_str()
 		;
+
+
+
 
 
 	bool verbose = false;
@@ -567,6 +578,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	BitmapBuf srcUsed;
 	CandidateClusterMap srcDiff;
+	MftDiff::Filemap filemap;
+
 	if (action == DdAction::VerifyBitmap) {
 		std::cerr << "Recalculating $Bitmap..." << std::endl;
 		auto t1 = GetTickCount();
@@ -590,10 +603,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			std::cerr << "Reading MFT segments..." << std::endl;
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
-			diff.printDirtyFiles = bPrintDirtyFiles;
 			diff.filemapNeedNames = bPrintDirtyFiles;
 			diff.scan();
 			srcDiff = std::move(diff.srcDiff);
+			filemap = std::move(diff.filemap);
 			std::cerr << "Used segments: " << diff.stats.usedSegments << std::endl;
 			std::cerr << "Dirty segments: " << diff.stats.dirtySegments << std::endl;
 			std::cerr << "Multisegments: " << diff.stats.multiSegments << std::endl;
@@ -613,12 +626,16 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			throw std::runtime_error(std::string{ "Manually constructed bitmap is not identical to the NTFS one!" });
 	}
 
+
+	LCN candidateClusterCount = 0;
+
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rcw) {
-		int64_t candidateClusterCount = 0;
 		for (auto& run : BitmapSpans(&srcDiff)) {
 			candidateClusterCount +=run.length;
-			if (action == DdAction::List)
-				printClusterSpan(run.offset, run.length, bPrintClustersAsSpans);
+			if (action == DdAction::List) {
+				if (bPrintDirtyClusters)
+					printClusterSpan(run.offset, run.length, bPrintClustersAsSpans);
+			}
 		}
 		std::cerr << "Candidate cluster count: " << candidateClusterCount << std::endl;
 
@@ -631,6 +648,21 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			verifyDiffContainsNewClusters(srcDiff, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
 		std::cerr << (GetTickCount() - t1) << std::endl;
 	}
+
+
+	if (action == DdAction::List && bPrintDirtyFiles) {
+		std::cerr << "Dirty/suspected files:" << std::endl;
+		for (auto& fi : filemap)
+			if (fi.second.dirty) {
+				std::string filename = fi.second.filename;
+				if (filename.empty())
+					filename = std::string{ "#" }+std::to_string(fi.first);
+				std::cerr << filename << " clusters=" << fi.second.totalClusters << std::endl;
+			}
+	}
+
+
+	LCN diffClusterCount = 0;
 
 	if (action == DdAction::Copy) {
 		ClusterCopier clcopy(src, dest);
@@ -649,10 +681,40 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		auto t1 = GetTickCount();
 		cldiff->process(srcDiff);
 		std::cerr << (GetTickCount() - t1) << std::endl;
+		diffClusterCount = cldiff->stats.clustersDiffCount;
 		std::cerr << "Diff clusters: " << cldiff->stats.clustersDiffCount << std::endl;
 	}
 
+
+	if ((action == DdAction::Compare || action == DdAction::Copy || action == DdAction::Rcw) && bPrintDirtyFiles) {
+		std::cerr << "Dirty files:" << std::endl;
+		for (auto& fi : filemap) {
+			if (!fi.second.dirty) continue;
+			bool found = false;
+			for (auto& run : fi.second.runList)
+				if (srcDiff.bitCount(run.offset, run.offset+run.length-1) > 0) {
+					found = true;
+					break;
+				}
+			if (!found) continue;
+			std::string filename = fi.second.filename;
+			if (filename.empty())
+				filename = std::string{ "#" }+std::to_string(fi.first);
+			std::cerr << filename << " clusters=" << fi.second.totalClusters << std::endl;
+		}
+	}
+
+
+
 	// Cleanup
+
+
+	//In List and Compare modes, return 0 only when there are no differences
+	if (action == DdAction::List && candidateClusterCount > 0)
+		return 1;
+	if (action == DdAction::Compare && diffClusterCount > 0)
+		return 1;
+
 	return 0;
 }
 

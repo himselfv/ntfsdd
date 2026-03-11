@@ -81,7 +81,8 @@ public:
 	Add files (segments) to mark them for skipping or force-copying.
 	On exit, contains entries for some of the files processed, including any explicitly requested by flags below.
 	*/
-	std::unordered_map<int64_t, FileEntry> filemap;
+	typedef std::unordered_map<SegmentNumber, FileEntry> Filemap;
+	Filemap filemap;
 
 	//If set, on exit filemap will include all files with dirty segments
 	bool filemapListDirty = false;

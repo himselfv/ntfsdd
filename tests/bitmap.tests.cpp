@@ -63,6 +63,14 @@ TEST_CASE("Bitmap ops", "[Bitmap]") {
 	CHECK(xor.get(17));
 	CHECK(!xor.get(33));
 	CHECK(xor.bitCount() == 24);
+
+	bmp1.set(1020, 1280);
+
+	CHECK(bmp1.bitCount(0, 5) == 0);
+	CHECK(bmp1.bitCount(6, 12) == 5);
+	CHECK(bmp1.bitCount(62, 1000) == 2);
+	CHECK(bmp1.bitCount(1010, 1020) == 1);
+	CHECK(bmp1.bitCount(1020, 1030) == 11);
 }
 
 TEST_CASE("Bitmap span all 1s", "[Bitmap]") {
