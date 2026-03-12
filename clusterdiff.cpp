@@ -5,7 +5,7 @@
 
 
 
-void printClusterSpan(LCN lcnFirst, LCN len, bool printClustersAsSpans)
+void printClusterSpan(LCN lcnFirst, LCN len, bool printClustersAsSpans, const std::string& separator)
 {
 	if (printClustersAsSpans)
 		std::cout << lcnFirst << ":" << len << std::endl;
@@ -31,29 +31,54 @@ ClusterProcessor::~ClusterProcessor()
 {
 }
 
+void ClusterProcessor::init()
+{
+	//Override to initialize supplementary objects once this one has been configured by the user.
+}
 
+void ClusterProcessor::process(CandidateClusterMap& srcSelection)
+{
+	this->init();
 
-ClusterDiffComparer::ClusterDiffComparer(Volume& src, Volume& dest)
-	: ClusterProcessor(src, dest),
-	srcReader(src.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*BytesPerCluster),
-	destReader(dest.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*BytesPerCluster)
+	LCN lastProgress = 0;
+	if (this->progressCallback) {
+		this->progressCallback->setMax(srcSelection.bitCount());
+		this->progressCallback->progress(0, true);
+	}
+	this->onProgress(0);
+}
+
+void ClusterProcessor::onProgress(LCN lcn)
 {
 }
 
-void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
-{
-	LCN lastProgress = 0;
-	this->onProgress(0);
 
-	auto slicedRuns = slice_runs(BitmapSpans(&srcDiff), ASYNC_BATCH_LEN);
+
+void ClusterDiffComparer::init()
+{
+	inherited::init();
+	srcReader.reset(new AsyncFileReader(src.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*BytesPerCluster));
+	destReader.reset(new AsyncFileReader(dest.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*BytesPerCluster));
+}
+
+void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
+{
+	inherited::process(srcSelection);
+
+	if (this->diffMap)
+		this->diffMap->resize(srcSelection.size);
+
+	auto slicedRuns = slice_runs(BitmapSpans(&srcSelection), ASYNC_BATCH_LEN);
 	auto sliceIt = slicedRuns.begin();
+
+	std::cerr << "Selection bit count: " << srcSelection.bitCount() << std::endl;
 
 	while (true) {
 		//Part 1. Push read commands into the queue
 		while (sliceIt != slicedRuns.end()) {
-			if (!srcReader.try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
+			if (!srcReader->try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
 				break;
-			assert(destReader.try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)));
+			assert(destReader->try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)));
 			++sliceIt;
 		}
 
@@ -61,16 +86,17 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 		//Easier to pop exactly one read a cycle and push one new. If multiple are done, next few cycles will just be fast.
 		uint32_t bytesRead = 0, bytesRead2 = 0;
 		uint64_t offset = 0, offset2 = 0;
-		auto srcPtr = srcReader.finalize_front(&bytesRead, &offset);
+		auto srcPtr = srcReader->finalize_front(&bytesRead, &offset);
 		if (srcPtr == nullptr) {
 			assert(sliceIt == slicedRuns.end());
-			assert(srcReader.pending_count == 0);
-			assert(destReader.pending_count == 0);
+			assert(srcReader->pending_count == 0);
+			assert(destReader->pending_count == 0);
 			break;
 		}
 		assert(offset % BytesPerCluster == 0);
 		assert(bytesRead % BytesPerCluster == 0);
-		auto destPtr = destReader.finalize_front(&bytesRead2, &offset2);
+		stats.bytesRead += bytesRead;
+		auto destPtr = destReader->finalize_front(&bytesRead2, &offset2);
 		assert(destPtr != nullptr);
 		assert(bytesRead == bytesRead2);
 		assert(offset == offset2);
@@ -100,14 +126,17 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcDiff)
 		if (lastClean != lcn - 1)
 			this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
 
-		srcReader.pop_front();
-		destReader.pop_front();
+		srcReader->pop_front();
+		destReader->pop_front();
 
-		if (stats.clustersChecked - lastProgress > 50000) {
-			lastProgress = stats.clustersChecked;
-			this->onProgress((offset2 + bytesRead2) / BytesPerCluster);
-		}
+		this->doProgress(stats.clustersChecked);
 	}
+
+	std::cerr << "Clusters checked: " << stats.clustersChecked << std::endl;
+	std::cerr << "Bytes read: " << stats.bytesRead << std::endl;
+	std::cerr << "Dirty span totals: " << stats.dirtySpanTotals << std::endl;
+	if (this->diffMap)
+		std::cerr << "Diff set bits: " << diffMap->bitCount() << std::endl;
 }
 
 void ClusterDiffComparer::onProgress(LCN lcn)
@@ -123,7 +152,8 @@ void ClusterDiffComparer::onProgress(LCN lcn)
 	auto t2 = GetTickCount() - this->m_progress_tm + 1; //To avoid div by zero.
 	this->m_progress_tm += t2;
 
-	std::cerr << "Clusters: " << stats.clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount / t2 << ", rpm=" << (double)thisRunCount / t2 << std::endl;
+	if (printProgressDetails)
+		std::cerr << "Clusters: " << stats.clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount / t2 << ", rpm=" << (double)thisRunCount / t2 << std::endl;
 	this->m_progress_prevStats = this->stats;
 }
 
@@ -133,51 +163,52 @@ void ClusterDiffComparer::onDirty(LCN lcn, void* data)
 
 void ClusterDiffComparer::onDirtySpan(LCN lcnFirst, LCN len, void* data)
 {
-	if (this->printDiff)
-		printClusterSpan(lcnFirst, len, this->printClustersAsSpans);
+	stats.dirtySpanTotals += len;
+	if (diffMap)
+		diffMap->set(ClusterRun{ lcnFirst, len });
 }
 
 
-ClusterDiffWriter::ClusterDiffWriter(Volume& src, Volume& dest)
-	: ClusterDiffComparer(src, dest), writer(dest.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*src.volumeData().BytesPerCluster)
+void ClusterDiffWriter::init()
 {
+	inherited::init();
+	writer.reset(new AsyncFileWriter(dest.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*src.volumeData().BytesPerCluster));
 }
 
-void ClusterDiffWriter::process(CandidateClusterMap& srcDiff)
+void ClusterDiffWriter::process(CandidateClusterMap& srcSelection)
 {
-	ClusterDiffComparer::process(srcDiff);
+	inherited::process(srcSelection);
 
 	//Wait until the writer has finished writing
-	while (writer.try_pop_front(nullptr, nullptr)) {}
+	while (writer->try_pop_front(nullptr, nullptr)) {}
 }
 
 void ClusterDiffWriter::onDirtySpan(LCN lcnFirst, LCN len, void* data)
 {
 	ClusterDiffComparer::onDirtySpan(lcnFirst, len, data);
 	//Block until we have a free slot and push the write request
-	writer.push_back(lcnFirst*BytesPerCluster, (uint32_t)(len*BytesPerCluster), data);
+	writer->push_back(lcnFirst*BytesPerCluster, (uint32_t)(len*BytesPerCluster), data);
 }
 
 
-ClusterCopier::ClusterCopier(Volume& src, Volume& dest)
-	: ClusterProcessor(src, dest),
-	srcReader(src.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*src.volumeData().BytesPerCluster),
-	writer(dest.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*src.volumeData().BytesPerCluster)
+void ClusterCopier::init()
 {
+	inherited::init();
+	srcReader.reset(new AsyncFileReader(src.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*src.volumeData().BytesPerCluster));
+	writer.reset(new AsyncFileWriter(dest.h(), ASYNC_QUEUE_DEPTH, ASYNC_BATCH_LEN*src.volumeData().BytesPerCluster));
 }
 
-void ClusterCopier::process(CandidateClusterMap& srcDiff)
+void ClusterCopier::process(CandidateClusterMap& srcSelection)
 {
-	LCN lastProgress = 0;
-	this->onProgress(0);
+	inherited::process(srcSelection);
 
-	auto slicedRuns = slice_runs(BitmapSpans(&srcDiff), ASYNC_BATCH_LEN);
+	auto slicedRuns = slice_runs(BitmapSpans(&srcSelection), ASYNC_BATCH_LEN);
 	auto sliceIt = slicedRuns.begin();
 
 	while (true) {
 		//Part 1. Push read commands into the queue
 		while (sliceIt != slicedRuns.end()) {
-			if (!srcReader.try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
+			if (!srcReader->try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
 				break;
 			++sliceIt;
 		}
@@ -186,36 +217,29 @@ void ClusterCopier::process(CandidateClusterMap& srcDiff)
 		//Easier to pop exactly one read a cycle and push one new. If multiple are done, next few cycles will just be fast.
 		uint32_t bytesRead = 0, bytesRead2 = 0;
 		uint64_t offset = 0, offset2 = 0;
-		auto srcPtr = srcReader.finalize_front(&bytesRead, &offset);
+		auto srcPtr = srcReader->finalize_front(&bytesRead, &offset);
 		if (srcPtr == nullptr) {
 			assert(sliceIt == slicedRuns.end());
-			assert(srcReader.pending_count == 0);
+			assert(srcReader->pending_count == 0);
 			break;
 		}
 		assert(offset % BytesPerCluster == 0);
 		assert(bytesRead % BytesPerCluster == 0);
 
 		stats.spansChecked++;
+		stats.clustersChecked += (bytesRead % BytesPerCluster);
 
 		LCN lcn = offset / BytesPerCluster;
 		LCN lastClean = lcn - 1;
 
 		//Block until we have a free slot and push the write request
-		writer.push_back(offset, bytesRead, srcPtr);
+		writer->push_back(offset, bytesRead, srcPtr);
 
-		srcReader.pop_front();
+		srcReader->pop_front();
 
-		if (stats.clustersChecked - lastProgress > 50000) {
-			lastProgress = stats.clustersChecked;
-			this->onProgress((offset2 + bytesRead2) / BytesPerCluster);
-		}
+		this->doProgress(stats.clustersChecked);
 	}
 
 	//Wait until the writer has finished writing
-	while (writer.try_pop_front(nullptr, nullptr)) {}
-}
-
-void ClusterCopier::onProgress(LCN lcn)
-{
-	//TODO
+	while (writer->try_pop_front(nullptr, nullptr)) {}
 }

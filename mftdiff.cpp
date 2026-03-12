@@ -95,6 +95,12 @@ void MftDiff::scan()
 
 	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
 	SegmentNumber segmentNo = -1;
+
+	if (this->progressCallback) {
+		this->progressCallback->setMax(totalSegments);
+		this->progressCallback->progress(0, true);
+	}
+
 	auto srcIter = SegmentIter(&mftSrc);
 	auto srcIt = srcIter.begin();
 	auto destIter = SegmentIter(&mftDest);
@@ -103,6 +109,8 @@ void MftDiff::scan()
 	for (; srcIt != srcIter.end(); ++srcIt) {
 		segmentNo++;
 		if (segmentNo % 1000 == 0) this->onProgress(segmentNo, totalSegments);
+		if (this->progressCallback)
+			this->progressCallback->progress(segmentNo, false);
 
 		bool dirty = false;
 		if (segmentNo > 0) { //For segmentNo==0 we've already read destIter.begin().
@@ -214,7 +222,7 @@ void MftDiff::scan()
 
 void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)
 {
-	std::cerr << idx << " / " << totalSegments << std::endl;
+//	std::cerr << idx << " / " << totalSegments << std::endl;
 }
 
 void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
@@ -224,12 +232,4 @@ void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
 
 	for (auto& run : fi.runList)
 		srcDiff.set(run);
-
-	//Выводим информацию об изменившихся файлах, если нас попросили
-	if (printDirtyFiles) {
-		std::string filename = fi.filename;
-		if (filename.empty())
-			filename = std::string{ "#" }+std::to_string(segmentNo);
-		std::cerr << "Dirty: " << filename << " clusters=" << fi.totalClusters << std::endl;
-	}
 }

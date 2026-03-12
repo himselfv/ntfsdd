@@ -89,7 +89,6 @@ public:
 
 	//If set, $FILENAME attributes will be processed and added to entries in the filemap
 	bool filemapNeedNames = false;
-	bool printDirtyFiles = false;
 
 	/*
 	Skip cluster listing/comparison/copying for these particular MFT segments.
@@ -103,6 +102,7 @@ public:
 	void skipSegments(const std::unordered_set<SegmentNumber>& segments);
 
 public:
+	ProgressCallback* progressCallback = nullptr;
 	MftDiff(Mft& mftSrc, Mft& mftDest);
 	void verifyMftRunsCompatible();
 	void scan();

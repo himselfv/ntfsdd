@@ -32,8 +32,14 @@ inline void throwLastOsError(const std::string& message) {
 #define OSCHECKBOOL(...) if(!__VA_ARGS__) throwLastOsError(#__VA_ARGS__);
 
 
-#define assert(COND) if(!(COND)) throw std::runtime_error(#COND);
-
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+#define assert(COND) \
+	do { \
+    if(!(COND)) throw std::runtime_error( \
+        std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ": " #COND) \
+    ); \
+	} while (0)
 
 
 class ProgressCallback {
@@ -47,8 +53,10 @@ public:
 	virtual void setMax(uint64_t value);
 	void setOnceEvery(uint64_t value);
 	inline void progress(uint64_t value, bool force) {
-		if ((value >= this->m_lastCall + this->m_onceEvery) || force)
+		if ((value >= this->m_lastCall + this->m_onceEvery) || force) {
+			this->m_lastCall = value;
 			this->progress_int(value);
+		}
 	}
 };
 
@@ -57,8 +65,11 @@ protected:
 	std::string m_operationName;
 public:
 	SimpleConsoleProgressCallback(std::string&& operationName);
+	inline void setOperationName(const std::string& value) { this->m_operationName = value;  }
 	virtual void progress_int(uint64_t value);
 };
+
+typedef SimpleConsoleProgressCallback ConsoleProgressCallback;
 
 
 

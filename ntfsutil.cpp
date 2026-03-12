@@ -63,7 +63,7 @@ SimpleConsoleProgressCallback::SimpleConsoleProgressCallback(std::string&& opera
 
 void SimpleConsoleProgressCallback::progress_int(uint64_t value)
 {
-	std::cerr << value << " / " << this->m_max << std::endl;
+	std::cerr << value << " / " << this->m_max << "\r" << std::flush;
 }
 
 
