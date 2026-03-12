@@ -5,7 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include "ntfs.h"
-#include "ntfsutil.h"
+#include "util.h"
 #include "ntfsvolume.h"
 #include "ntfsmft.h"
 #include "bitmap.h"
@@ -397,17 +397,16 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	app.get_formatter()->description_paragraph_width(100);
 
 	DdAction action{ DdAction::Compare };
-	app.add_option("action, --action", action, "Action to take:\n  "+ enumNameDesc<DdAction>(":\t", "\n  "))
-		->group("Main options")
-		//->type_name("list|compare|copy|rcw")
+	app.add_option("action", action, "Action to take:\n  "+ enumNameDesc<DdAction>(":\t", "\n  "))
+//		->group("Main options")
 		->type_name(enumNames<DdAction>("|"))
 		->transform(CLI::CheckedTransformer(enumMap<DdAction>(), CLI::ignore_case).description(""))
 		->capture_default_str()
 		;
 
 	DdMode mode{ DdMode::MFT };
-	app.add_option("select, --select, --mode", mode, "Selection method to use:\n " + enumNameDesc<DdMode>(":\t", "\n  "))
-		->group("Main options")
+	app.add_option("--select", mode, "Selection method to use:\n " + enumNameDesc<DdMode>(":\t", "\n  "))
+//		->group("Main options")
 		->type_name(enumNames<DdMode>("|"))
 		->transform(CLI::CheckedTransformer(enumMap<DdMode>(), CLI::ignore_case).description(""))
 		->capture_default_str()
@@ -427,11 +426,12 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	std::string srcPath, destPath;
 	app.add_option("source, --source", srcPath, "Source device/file")
-		->group("Main options")
+//		->group("Main options")
 		->required();
 	app.add_option("destination, --dest", destPath, "Target device/file")
-		->group("Main options")
+//		->group("Main options")
 		->required();
+
 
 	//We'll enforce FSCTL_LOCK_VOLUME where it seems reasonable and TRY it elsewhere.
 	//These flags force us to insist on it even if we're not sure it should work.
@@ -472,6 +472,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 
+	std::unordered_set<SegmentNumber> skipSegments{};
+	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.")
+		->group("Processing options");
+
 	LCN asyncBatchLen = 160;
 	app.add_option("--batch-len", asyncBatchLen, "Max batch length, in clusters, for reading.")
 		->group("Processing options")
@@ -484,36 +488,47 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 
-	std::unordered_set<SegmentNumber> skipSegments{};
-	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.");
-
 
 	//In List mode, this is going to print *selected* files. In Compare, the files with actual *differences* (interspersed with clusters)
 	//Note that this will not print DELETED files. The comparison is one-way.
-	bool bPrintClusters = false;
-	app.add_flag("--print-clusters", bPrintClusters, "In List and Compare modes, print selected and matching clusters respectively.")
+	ClusterPrinter clusterPrinter;
+	app.add_option("--print-clusters", clusterPrinter.outputFile, "In List and Compare modes, print selected and matching clusters respectively.")
+		->group("Output options")
+		->expected(0,0)
+		->default_str("-")
+		;
+
+	app.add_option("--print-clusters-to", clusterPrinter.outputFile, "Same as --print-clusters but allows you to specify a file.")
+		->group("Output options")
+		;
+
+	app.add_flag("--cluster-spans", clusterPrinter.clustersAsSpans, "For modes that print cluster lists, print cluster spans instead of individual clusters.")
 		->group("Output options")
 		->capture_default_str()
 		;
 
-	bool bPrintClustersAsSpans = false;
-	app.add_flag("--clusters-as-spans", bPrintClustersAsSpans, "For modes that print cluster lists, print cluster spans instead of individual clusters.")
+	app.add_option("--cluster-separator", clusterPrinter.separator, "For modes that print cluster lists, use this as a separator (\\n etc allowed).")
+		->transform(CLI::EscapedString)
+		->group("Output options")
+		;
+
+
+	std::string printFilesTo {};
+	app.add_flag("--print-files", printFilesTo, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
+		->group("Output options")
+		->expected(0, 0)
+		->default_str("-")
+		;
+	app.add_option("--print-files-to", printFilesTo, "Same as --print-files but allows you to specify a file.")
+		->group("Output options")
+		;
+
+
+	bool progress = false;
+	app.add_flag("--progress", progress, "Display operations progress.")
 		->group("Output options")
 		->capture_default_str()
 		;
-
-	bool bPrintClustersOneLine = false;
-	app.add_flag("--clusters-one-line", bPrintClustersAsSpans, "For modes that print cluster lists, print them on one line, space-separated.")
-		->group("Output options")
-		->capture_default_str()
-		;
-
-	bool bPrintFiles = false;
-	app.add_flag("--print-files", bPrintFiles, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
-		->group("Output options")
-		->capture_default_str()
-		;
-
 
 	bool verbose = false;
 	app.add_flag("--verbose", verbose, "Detailed logging.")
@@ -522,7 +537,6 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 	CLI11_PARSE(app, argc, argv);
-
 
 	bool bNeedsWrites = (action == DdAction::Copy || action == DdAction::Rcw);
 
@@ -620,19 +634,20 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			progressCallback.setOnceEvery(1000);
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
-			diff.filemapNeedNames = bPrintFiles;
-			diff.filemapListDirty = bPrintFiles;
+			diff.filemapNeedNames = !printFilesTo.empty();
+			diff.filemapListDirty = !printFilesTo.empty();
 			diff.progressCallback = &progressCallback;
 			diff.scan();
 			srcSelect = std::move(diff.srcDiff);
 			filemap = std::move(diff.filemap);
 			std::cerr << "Used segments: " << diff.stats.usedSegments << std::endl;
 			std::cerr << "Dirty segments: " << diff.stats.dirtySegments << std::endl;
-			std::cerr << "Multisegments: " << diff.stats.multiSegments << std::endl;
+			if (verbose)
+				std::cerr << "Multisegments: " << diff.stats.multiSegments << std::endl;
 			break;
 		}
 		}
-		std::cerr << (GetTickCount() - t1) << std::endl;
+		std::cerr << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
 	//≈сли в результате VerifyBitmap или любого действи€ с mode==MFT расчитали карту кластеров, то сравниваем еЄ с $Bitmap.
@@ -650,14 +665,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	if (action == DdAction::List || action == DdAction::Copy || action == DdAction::Compare || action == DdAction::Rcw) {
 		//Dirty clusters after selection
-		for (auto& run : BitmapSpans(&srcSelect)) {
-			candidateClusterCount += run.length;
-			if (action == DdAction::List || action == DdAction::Copy) {
-				if (bPrintClusters)
-					printClusterSpan(run.offset, run.length, bPrintClustersAsSpans, bPrintClustersOneLine ? "\n" : " ");
-			}
-		}
-		std::cerr << "Candidate cluster count: " << candidateClusterCount << std::endl;
+		if ((action == DdAction::List || action == DdAction::Copy))
+			clusterPrinter.print(srcSelect);
+		candidateClusterCount = srcSelect.bitCount();
+		std::cerr << "Selected cluster count: " << candidateClusterCount << std::endl;
 
 		//Safety: ѕровер€ем, что наш получившийс€ список содержит все кластеры srcBitmap, уникальные дл€ него (т.е. перешедшие в состо€ние 1 с момента destBitmap)
 		//If $Bitmap shows a block was turned from free to used, warn and copy it, as that should not happen if I'm parsing MFT correctly.
@@ -671,14 +682,14 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	//Dirty files after selection
-	if ((action == DdAction::List || action == DdAction::Copy) && bPrintFiles) {
-		std::cerr << "Dirty/suspected files:" << std::endl;
+	if ((action == DdAction::List || action == DdAction::Copy) && !printFilesTo.empty()) {
+		std::cerr << "Selected files:" << std::endl;
 		for (auto& fi : filemap)
 			if (fi.second.dirty) {
 				std::string filename = fi.second.filename;
 				if (filename.empty())
 					filename = std::string{ "#" }+std::to_string(fi.first);
-				std::cerr << filename << " clusters=" << fi.second.totalClusters << std::endl;
+				std::cerr << filename << "\t" << fi.second.totalClusters << std::endl;
 			}
 	}
 
@@ -704,6 +715,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	if (clproc) {
 		clproc->progressCallback = &progressCallback;
 		if (auto cldiff = dynamic_cast<ClusterDiffComparer*>(clproc.get())) {
+			cldiff->verbose = verbose;
 			cldiff->printProgressDetails = verbose;
 			cldiff->diffMap = &srcDiff;
 		}
@@ -720,15 +732,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	//Dirty clusters after comparison
-	if ((action == DdAction::Compare || action == DdAction::Rcw) && bPrintClusters) {
-		for (auto& run : BitmapSpans(&srcDiff))
-			printClusterSpan(run.offset, run.length, bPrintClustersAsSpans, bPrintClustersOneLine ? "\n" : " ");
-	}
+	if (action == DdAction::Compare || action == DdAction::Rcw)
+		clusterPrinter.print(srcDiff);
 
 	//Dirty files after comparison
-	if ((action == DdAction::Compare || action == DdAction::Rcw) && bPrintFiles) {
-		LCN dirtyClustersTotal = 0;
-		std::cerr << "Dirty files:" << std::endl;
+	if ((action == DdAction::Compare || action == DdAction::Rcw) && !printFilesTo.empty()) {
+		LCN diffClustersInFilesTotal = 0;
+		std::cerr << "Diff files:" << std::endl;
 		for (auto& fi : filemap) {
 			if (!fi.second.dirty) continue;
 			size_t bitCount = 0;
@@ -738,10 +748,11 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			std::string filename = fi.second.filename;
 			if (filename.empty())
 				filename = std::string{ "#" }+std::to_string(fi.first);
-			std::cerr << filename << " clusters=" << bitCount << std::endl;
-			dirtyClustersTotal += bitCount;
+			std::cerr << filename << "\t" << bitCount << std::endl;
+			diffClustersInFilesTotal += bitCount;
 		}
-		std::cerr << "Clusters in dirty files:" << dirtyClustersTotal << std::endl;
+		//Must match diffClusterCount
+		std::cerr << "Clusters in diff files:" << diffClustersInFilesTotal << std::endl;
 	}
 
 

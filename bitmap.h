@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "ntfsutil.h"
+#include "util.h"
 
 struct BitmapBuf;
 
@@ -106,3 +106,14 @@ public:
 	Iterator end() { return{ nullptr, 0 }; }
 };
 
+
+struct ClusterPrinter {
+public:
+	std::string outputFile{};
+	bool clustersAsSpans = false;
+	std::string separator = " ";
+	void print(Bitmap& bitmap);
+};
+
+void printClusterSpan(std::ostream& out, LCN lcnFirst, LCN len, bool printClustersAsSpans, const std::string& separator);
+void printClusters(std::ostream& out, Bitmap& bitmap, bool printClustersAsSpans, const std::string& separator);

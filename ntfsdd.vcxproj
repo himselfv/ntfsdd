@@ -152,7 +152,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ntfs.cpp" />
     <ClCompile Include="ntfsdd.cpp" />
   </ItemGroup>
   <ItemGroup>

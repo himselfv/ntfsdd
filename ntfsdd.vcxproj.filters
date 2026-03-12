@@ -18,8 +18,5 @@
     <ClCompile Include="ntfsdd.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ntfs.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
 </Project>

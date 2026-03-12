@@ -21,9 +21,6 @@
     <ClCompile Include="ntfsmft.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="ntfsutil.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="ntfsvolume.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -33,5 +30,40 @@
     <ClCompile Include="clusterdiff.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="mftutil.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ntfs.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="bitmap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="clusterdiff.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="mftdiff.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="mftutil.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ntfs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ntfsmft.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ntfsvolume.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include "ntfsmft.h"
+#include "mftutil.h"
 
 LCN NonResidentData::getLcn(VCN vcn) {
 	for (auto& span : this->m_vcnMap)

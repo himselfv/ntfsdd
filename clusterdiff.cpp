@@ -1,22 +1,7 @@
 #pragma once
 #include "clusterdiff.h"
-#include "ntfsutil.h"
+#include "util.h"
 #include "ntfsmft.h"
-
-
-
-void printClusterSpan(LCN lcnFirst, LCN len, bool printClustersAsSpans, const std::string& separator)
-{
-	if (printClustersAsSpans)
-		std::cout << lcnFirst << ":" << len << std::endl;
-	else {
-		while (len > 0) {
-			std::cout << lcnFirst << std::endl;
-			len--;
-			lcnFirst++;
-		}
-	}
-}
 
 
 
@@ -71,7 +56,8 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
 	auto slicedRuns = slice_runs(BitmapSpans(&srcSelection), ASYNC_BATCH_LEN);
 	auto sliceIt = slicedRuns.begin();
 
-	std::cerr << "Selection bit count: " << srcSelection.bitCount() << std::endl;
+	if (this->verbose)
+		std::cerr << "Selection bit count: " << srcSelection.bitCount() << std::endl;
 
 	while (true) {
 		//Part 1. Push read commands into the queue
@@ -132,11 +118,13 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
 		this->doProgress(stats.clustersChecked);
 	}
 
-	std::cerr << "Clusters checked: " << stats.clustersChecked << std::endl;
-	std::cerr << "Bytes read: " << stats.bytesRead << std::endl;
-	std::cerr << "Dirty span totals: " << stats.dirtySpanTotals << std::endl;
-	if (this->diffMap)
-		std::cerr << "Diff set bits: " << diffMap->bitCount() << std::endl;
+	if (this->verbose) {
+		std::cerr << "Clusters checked: " << stats.clustersChecked << std::endl;
+		std::cerr << "Bytes read: " << stats.bytesRead << std::endl;
+		std::cerr << "Dirty span totals: " << stats.dirtySpanTotals << std::endl;
+		if (this->diffMap)
+			std::cerr << "Diff set bits: " << diffMap->bitCount() << std::endl;
+	}
 }
 
 void ClusterDiffComparer::onProgress(LCN lcn)

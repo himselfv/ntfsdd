@@ -4,7 +4,7 @@
 #include <iostream>
 #include <vector>
 #include "ntfs.h"
-#include "ntfsutil.h"
+#include "util.h"
 
 
 class Volume;

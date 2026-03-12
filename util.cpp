@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 #include "ntfs.h"
-#include "ntfsutil.h"
+#include "util.h"
 
 /*
 LCN runs in nonresident attributes are variable-sized, from 1 to 15 bytes in length (in practice 8 bytes should be more than enough).

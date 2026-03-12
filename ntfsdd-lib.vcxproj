@@ -147,9 +147,21 @@
     <ClCompile Include="bitmap.cpp" />
     <ClCompile Include="clusterdiff.cpp" />
     <ClCompile Include="mftdiff.cpp" />
+    <ClCompile Include="mftutil.cpp" />
+    <ClCompile Include="ntfs.cpp" />
     <ClCompile Include="ntfsmft.cpp" />
-    <ClCompile Include="ntfsutil.cpp" />
     <ClCompile Include="ntfsvolume.cpp" />
+    <ClCompile Include="util.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="bitmap.h" />
+    <ClInclude Include="clusterdiff.h" />
+    <ClInclude Include="mftdiff.h" />
+    <ClInclude Include="mftutil.h" />
+    <ClInclude Include="ntfs.h" />
+    <ClInclude Include="ntfsmft.h" />
+    <ClInclude Include="ntfsvolume.h" />
+    <ClInclude Include="util.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

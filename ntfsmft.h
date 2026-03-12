@@ -1,7 +1,7 @@
 #pragma once
 #include <windows.h>
 #include "ntfs.h"
-#include "ntfsutil.h"
+#include "util.h"
 #include "ntfsvolume.h"
 #include "bitmap.h"
 

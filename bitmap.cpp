@@ -1,5 +1,9 @@
 #pragma once
 #include "bitmap.h"
+#include <iostream>
+#include <fstream>
+#include "util.h"
+
 
 void Bitmap::set(size_t lo, size_t hi) {
 	if (lo > hi) return;
@@ -346,5 +350,44 @@ void BitmapSpans::Iterator::eat1s() {
 	}
 	if (current.length >= remainingSize)
 		return;
+}
+
+
+void ClusterPrinter::print(Bitmap& bitmap)
+{
+	if (outputFile.empty()) return;
+
+	std::ofstream file_stream;
+	std::ostream* out = nullptr;
+	if (outputFile == "-")
+		out = &std::cout;
+	else {
+		file_stream.open(outputFile);
+		if (!file_stream.is_open())
+			throwLastOsError();
+		file_stream.seekp(std::ofstream::end, 0);
+		out = &file_stream;
+	}
+	printClusters(*out, bitmap, this->clustersAsSpans, this->separator);
+}
+
+void printClusterSpan(std::ostream& out, LCN lcnFirst, LCN len, bool printClustersAsSpans, const std::string& separator)
+{
+	if (printClustersAsSpans)
+		out << lcnFirst << ":" << len << separator;
+	else {
+		while (len > 0) {
+			out << lcnFirst << separator;
+			len--;
+			lcnFirst++;
+		}
+	}
+}
+
+void printClusters(std::ostream& out, Bitmap& bitmap, bool printClustersAsSpans, const std::string& separator)
+{
+	for (auto& run : BitmapSpans(&bitmap))
+		printClusterSpan(out, run.offset, run.length, printClustersAsSpans, separator);
+	out << std::endl;
 }
 

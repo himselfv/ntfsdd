@@ -222,7 +222,6 @@ void MftDiff::scan()
 
 void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)
 {
-//	std::cerr << idx << " / " << totalSegments << std::endl;
 }
 
 void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)

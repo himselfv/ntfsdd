@@ -81,11 +81,10 @@ protected:
 	ClusterDiffStats m_progress_prevStats;
 	DWORD m_progress_tm = 0;
 public:
+	bool verbose = false;
 	bool printProgressDetails = false;
 	virtual void onProgress(LCN lcn) override;
 };
-
-void printClusterSpan(LCN lcnFirst, LCN len, bool printClustersAsSpans, const std::string& separator);
 
 
 /*

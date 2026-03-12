@@ -8,6 +8,7 @@ to be checked for differences.
 #include <unordered_set>
 #include "bitmap.h"
 #include "ntfsmft.h"
+#include "mftutil.h"
 
 /*
 There are two ways to store the candidate cluster list: as a bitmap or as a run list.

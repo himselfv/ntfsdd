@@ -1,6 +1,6 @@
 #include "catch.hpp"
 #include "bitmap.h"
-#include "ntfsutil.h"
+#include "util.h"
 
 int rand_int(int min, int max)
 {

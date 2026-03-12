@@ -1,6 +1,7 @@
 #pragma once
 #include "ntfsvolume.h"
 #include "ntfsmft.h"
+#include "mftutil.h"
 #include <memory>
 
 VolumeLock::VolumeLock(Volume& volume, bool ignoreErrors)
