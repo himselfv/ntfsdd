@@ -67,3 +67,23 @@ void SimpleConsoleProgressCallback::progress_int(uint64_t value)
 }
 
 
+void FilePrinter::open()
+{
+	if (outputFile.empty()) return;
+
+	if (outputFile == "-")
+		this->out = &std::cout;
+	else {
+		this->m_fileStream.open(outputFile);
+		if (!this->m_fileStream.is_open())
+			throwLastOsError();
+		this->m_fileStream.seekp(std::ofstream::end, 0);
+		out = &this->m_fileStream;
+	}
+}
+
+void FilePrinter::printOne(const std::string& entry)
+{
+	(*this->out) << entry << std::endl;
+}
+

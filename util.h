@@ -2,8 +2,10 @@
 #include <windows.h>
 #include <winioctl.h>
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <string>
+#include <memory>
 #include "ntfs.h"
 
 //This might have better gone to osutil.h
@@ -70,6 +72,20 @@ public:
 };
 
 typedef SimpleConsoleProgressCallback ConsoleProgressCallback;
+
+
+
+struct FilePrinter {
+protected:
+	std::ofstream m_fileStream {};
+	std::ostream* out {};
+public:
+	std::string outputFile{};
+	std::string separator = " ";
+	inline bool active() { return !this->outputFile.empty(); }
+	void open();
+	void printOne(const std::string& entry);
+};
 
 
 

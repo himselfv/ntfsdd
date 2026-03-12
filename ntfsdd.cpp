@@ -513,13 +513,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 
-	std::string printFilesTo {};
-	app.add_flag("--print-files", printFilesTo, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
+	FilePrinter filenamePrinter;
+	app.add_flag("--print-files", filenamePrinter.outputFile, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
 		->group("Output options")
 		->expected(0, 0)
 		->default_str("-")
 		;
-	app.add_option("--print-files-to", printFilesTo, "Same as --print-files but allows you to specify a file.")
+	app.add_option("--print-files-to", filenamePrinter.outputFile, "Same as --print-files but allows you to specify a file.")
 		->group("Output options")
 		;
 
@@ -634,8 +634,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			progressCallback.setOnceEvery(1000);
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
-			diff.filemapNeedNames = !printFilesTo.empty();
-			diff.filemapListDirty = !printFilesTo.empty();
+			diff.filemapNeedNames = !filenamePrinter.active();
+			diff.filemapListDirty = !filenamePrinter.active();
 			diff.progressCallback = &progressCallback;
 			diff.scan();
 			srcSelect = std::move(diff.srcDiff);
@@ -682,14 +682,14 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	//Dirty files after selection
-	if ((action == DdAction::List || action == DdAction::Copy) && !printFilesTo.empty()) {
-		std::cerr << "Selected files:" << std::endl;
+	if ((action == DdAction::List || action == DdAction::Copy) && !filenamePrinter.active()) {
+		filenamePrinter.open();
 		for (auto& fi : filemap)
 			if (fi.second.dirty) {
 				std::string filename = fi.second.filename;
 				if (filename.empty())
 					filename = std::string{ "#" }+std::to_string(fi.first);
-				std::cerr << filename << "\t" << fi.second.totalClusters << std::endl;
+				filenamePrinter.printOne(filename + "\t" + std::to_string(fi.second.totalClusters));
 			}
 	}
 
@@ -736,9 +736,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		clusterPrinter.print(srcDiff);
 
 	//Dirty files after comparison
-	if ((action == DdAction::Compare || action == DdAction::Rcw) && !printFilesTo.empty()) {
+	if ((action == DdAction::Compare || action == DdAction::Rcw) && filenamePrinter.active()) {
+		filenamePrinter.open();
 		LCN diffClustersInFilesTotal = 0;
-		std::cerr << "Diff files:" << std::endl;
 		for (auto& fi : filemap) {
 			if (!fi.second.dirty) continue;
 			size_t bitCount = 0;
@@ -748,7 +748,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			std::string filename = fi.second.filename;
 			if (filename.empty())
 				filename = std::string{ "#" }+std::to_string(fi.first);
-			std::cerr << filename << "\t" << bitCount << std::endl;
+			filenamePrinter.printOne(filename + "\t" + std::to_string(bitCount));
 			diffClustersInFilesTotal += bitCount;
 		}
 		//Must match diffClusterCount
