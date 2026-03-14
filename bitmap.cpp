@@ -194,7 +194,7 @@ bool Bitmap::isZero() const
 
 BitmapBuf Bitmap::andNot(const Bitmap& other) const
 {
-	assert(this->size == other.size);
+	assert_eq(this->size, other.size);
 	BitmapBuf result;
 	result.resize(this->size);
 	this->andNot(other, result);
@@ -211,7 +211,7 @@ void Bitmap::andNot(const Bitmap& other, Bitmap& result) const
 
 BitmapBuf Bitmap::operator^(const Bitmap& other) const
 {
-	assert(this->size == other.size);
+	assert_eq(this->size, other.size);
 	BitmapBuf result;
 	result.resize(this->size);
 	this->apply_operation3(

@@ -11,10 +11,10 @@ VolumeLock::VolumeLock(Volume& volume, bool ignoreErrors)
 	if (!volume.ioctl(FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL)) {
 		if (!ignoreErrors)
 			throwLastOsError("FSCTL_LOCK_VOLUME");
-		std::cerr << "WARNING: Cannot lock volume. Error " << GetLastError() << "." << std::endl;
+		qWarning() << "Cannot lock volume. Error " << GetLastError() << "." << std::endl;
 	}
 	else {
-		std::cerr << "Volume locked." << std::endl;
+		qVerbose() << "Volume locked." << std::endl;
 	}
 }
 
@@ -23,9 +23,9 @@ VolumeLock::~VolumeLock()
 	DWORD bytesReturned = 0;
 	if (this->volume && this->volume->h() != INVALID_HANDLE_VALUE) {
 		if (!this->volume->ioctl(FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
-			std::cerr << "WARNING: Cannot unlock volume. Error " << GetLastError() << "." << std::endl; //But ignore
+			qWarning() << "WARNING: Cannot unlock volume. Error " << GetLastError() << "." << std::endl; //But ignore
 		else
-			std::cerr << "Volume unlocked." << std::endl;
+			qVerbose() << "Volume unlocked." << std::endl;
 		this->volume = nullptr;
 	}
 }
@@ -33,7 +33,7 @@ VolumeLock::~VolumeLock()
 Volume::Volume(const std::string& path, DWORD dwOpenMode)
 {
 	this->m_path = path;
-	std::cerr << "Opening " << path << "..." << std::endl;
+	qInfo() << "Opening " << path << "..." << std::endl;
 
 	// Open Handles
 	this->m_h = CreateFileA(path.c_str(), dwOpenMode, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);

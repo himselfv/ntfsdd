@@ -63,7 +63,14 @@ inline HRESULT comCheck(HRESULT hr, const char* context) {
 #define assert(COND) \
 	do { \
     if(!(COND)) throw std::runtime_error( \
-        std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ": " #COND) \
+        std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ":\n" #COND) \
+    ); \
+	} while (0)
+
+#define assert_eq(VAL1,VAL2) \
+	do { \
+    if(!(VAL1==VAL2)) throw std::runtime_error( \
+        std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") == " #VAL2 " (" + std::to_string(VAL2) + ")" \
     ); \
 	} while (0)
 

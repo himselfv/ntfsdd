@@ -334,7 +334,7 @@ void verifyMftLayout(Volume& vol, Mft& mft, const VOLUME_BITMAP_BUFFER* bitmap)
 	assert(totalBytesDiff < ((volData.BytesPerCluster > volData.BytesPerSector) ? volData.BytesPerCluster : volData.BytesPerSector));
 
 	if (bitmap != nullptr)
-		assert(volData.TotalClusters.QuadPart == bitmap->StartingLcn.QuadPart + bitmap->BitmapSize.QuadPart);
+		assert_eq(volData.TotalClusters.QuadPart, bitmap->StartingLcn.QuadPart + bitmap->BitmapSize.QuadPart);
 }
 
 
@@ -353,7 +353,7 @@ void rebuildVolumeBitmap(Volume& vol, Mft& mft, BitmapBuf* bmp)
 			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE))
 				bmp->set(run.offset, run.offset + run.length - 1);
 		}
-		if (idx % 1000 == 0) std::cerr << idx << " / " << totalSegments << std::endl;
+		if (idx % 1000 == 0) qVerbose() << idx << " / " << totalSegments << std::endl;
 		idx++;
 	}
 }
@@ -590,11 +590,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	CLI11_PARSE(app, argc, argv);
 
-	if (debug)
+	if (debug) {
 		LogPrinter::verbosity = Verbosity::Debug;
-	else if (verbose)
+		verbose = true;
+	} else if (verbose) {
 		LogPrinter::verbosity = Verbosity::Verbose;
-	else if (!quiet)
+		quiet = false;
+	} else if (!quiet)
 		LogPrinter::verbosity = Verbosity::Info;
 	else
 		LogPrinter::verbosity = Verbosity::Warning;
@@ -689,7 +691,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	BitmapBuf srcUsed;
 	CandidateClusterMap srcSelect;
+
+	//Everything related to printing affected files only works in certain modes:
+	// - MFT comparison must be on (we don't deal with files in blind $Bitmap modes)
+	// - File name printing must be requested, or we don't bother parsing and recording affected files, for speed
+	//We'll check and warn the user later.
 	MftDiff::Filemap filemap;
+	bool filemapHasSelectedFiles = false;
 
 	if (action == DdAction::VerifyBitmap) {
 		qInfo() << "Recalculating $Bitmap..." << std::endl;
@@ -714,14 +722,16 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			qVerbose() << "Reading MFT segments..." << std::endl;
 			ConsoleProgressCallback progressCallback("Reading MFT");
 			progressCallback.setOnceEvery(1000);
+			filemapHasSelectedFiles = filenamePrinter.active();
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
-			diff.filemapNeedNames = filenamePrinter.active();
-			diff.filemapListDirty = filenamePrinter.active();
+			diff.filemapNeedNames = filemapHasSelectedFiles;
+			diff.filemapListDirty = filemapHasSelectedFiles;
 			if (progress)
 				diff.progressCallback = &progressCallback;
 			diff.scan();
 			srcSelect = std::move(diff.srcDiff);
+			srcUsed = std::move(diff.srcUsed);
 			filemap = std::move(diff.filemap);
 			qInfo() << "Segments: used=" << diff.stats.usedSegments << ", dirty=" << diff.stats.dirtySegments << std::endl;
 			qVerbose() << "Multisegments: " << diff.stats.multiSegments << std::endl;
@@ -731,47 +741,68 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
+	//Not all selection modes support filename collection, warn the user on conflicting options here instead of later at every point
+	if (filenamePrinter.active() && !filemapHasSelectedFiles)
+		qWarning() << "Cannot print file names in this mode, ignoring" << std::endl;
+
 
 	//Verify our manual cluster usage map matches $Bitmap, if we have it from VerifyBitmap or any task with select==MFT.
 	//Be quiet on success in non-VerifyBitmap modes.
 	if (srcUsed.size > 0) {
-		qVerbose() << "Verifying file table bitmap..." << std::endl;
+		qVerbose() << "Verifying: Manually constructed bitmap matches $Bitmap..." << std::endl;
+		auto t1 = GetTickCount();
 		auto cmp = compareBitmaps(srcBitmap.buf, &srcUsed);
 		if (!cmp)
 			throw std::runtime_error(std::string{ "Manually constructed bitmap is not identical to the NTFS one!" });
 	}
 
 
-	LCN candidateClusterCount = 0;
+	LCN selectedClusterCount = 0;
 
 	if (action == DdAction::List || action == DdAction::Copy || action == DdAction::Compare || action == DdAction::Rcw) {
 		//Dirty clusters after selection
 		if ((action == DdAction::List || action == DdAction::Copy))
 			clusterPrinter.print(srcSelect);
-		candidateClusterCount = srcSelect.bitCount();
-		qInfo() << "Selected cluster count: " << candidateClusterCount << ", size: " << dataSizeToStr(candidateClusterCount*src.volumeData().BytesPerCluster) << std::endl;
+		selectedClusterCount = srcSelect.bitCount();
+		qInfo() << "Selected cluster count: " << selectedClusterCount << ", size: " << dataSizeToStr(selectedClusterCount*src.volumeData().BytesPerCluster) << std::endl;
 
 		//Safety: Verify that our resulting list contains all clusters unique to srcBitmap (that is, switched to 1 since destBitmap).
 		//If $Bitmap shows a block was turned from free to used, stop. That should not happen if I'm parsing MFT correctly.
-		auto t1 = GetTickCount();
+		qVerbose() << "Verifying: The selection contains all newly allocated clusters..." << std::endl;
 		if (bBlankTarget)
 			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap());
 		else
 			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
-		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
 
-	//Dirty files after selection
-	if ((action == DdAction::List || action == DdAction::Copy) && !filenamePrinter.active()) {
-		filenamePrinter.open();
+	//If we have requested listing files
+	if (filemapHasSelectedFiles) {
+		//In other modes we print files with clusters that actually differ
+		if ((action == DdAction::List || action == DdAction::Copy) && filenamePrinter.active()) {
+			qVerbose() << "Printing selected files..." << std::endl;
+			auto t1 = GetTickCount();
+			filenamePrinter.open();
+			for (auto& fi : filemap)
+				if (fi.second.dirty) {
+					std::string filename = fi.second.filename;
+					if (filename.empty())
+						filename = std::string{ "#" }+std::to_string(fi.first);
+					filenamePrinter.printOne(filename + "\t" + std::to_string(fi.second.totalClusters));
+				}
+			qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
+		}
+
+		//Let's on this occasion be extra safe and verify that the totality of selected files' clusters
+		//equals the totality of selected clusters according to the selection bitmap.
+		auto t1 = GetTickCount();
+		qVerbose() << "Verifying: File map covers the entire cluster selection..." << std::endl;
+		LCN totalClustersInFilemap = 0;
 		for (auto& fi : filemap)
-			if (fi.second.dirty) {
-				std::string filename = fi.second.filename;
-				if (filename.empty())
-					filename = std::string{ "#" }+std::to_string(fi.first);
-				filenamePrinter.printOne(filename + "\t" + std::to_string(fi.second.totalClusters));
-			}
+			if (fi.second.dirty)
+				totalClustersInFilemap += fi.second.totalClusters;
+		assert_eq(totalClustersInFilemap, selectedClusterCount);
+		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
 
@@ -818,7 +849,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		clusterPrinter.print(srcDiff);
 
 	//Dirty files after comparison
-	if ((action == DdAction::Compare || action == DdAction::Rcw) && filenamePrinter.active()) {
+	if ((action == DdAction::Compare || action == DdAction::Rcw) && filenamePrinter.active() && filemapHasSelectedFiles) {
 		filenamePrinter.open();
 		LCN diffClustersInFilesTotal = 0;
 		for (auto& fi : filemap) {
@@ -833,10 +864,11 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			filenamePrinter.printOne(filename + "\t" + std::to_string(bitCount) + "\t" + dataSizeToStr(bitCount*src.volumeData().BytesPerCluster));
 			diffClustersInFilesTotal += bitCount;
 		}
+
 		//Must match diffClusterCount
 		qInfo() << "Clusters in diff files: " << diffClustersInFilesTotal << std::endl;
 		if (diffClustersInFilesTotal != diffClusterCount)
-			qWarning() << "Clusters in diff files don't match diff clusters! We're probably parsing something wrong but it's too late to bug out now.";
+			qWarning() << "Clusters in diff files don't match diff clusters! We're probably parsing something wrong but it's too late to bug out now." << std::endl;
 	}
 
 
@@ -846,7 +878,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	if (bReturnExitCode) {
 		//In List and Compare modes, return 0 only when there are no differences
-		if (action == DdAction::List && candidateClusterCount > 0)
+		if (action == DdAction::List && selectedClusterCount > 0)
 			return 1;
 		if (action == DdAction::Compare && diffClusterCount > 0)
 			return 1;
@@ -860,7 +892,7 @@ int main(int argc, char* argv[]) {
 		main2(argc, argv);
 	}
 	catch (const std::exception& e) {
-		qError() << e.what();
+		qError() << e.what() << std::endl;
 		return -1;
 	}
 }
