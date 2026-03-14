@@ -710,9 +710,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			progressCallback.setOnceEvery(1000);
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
-			diff.filemapNeedNames = !filenamePrinter.active();
-			diff.filemapListDirty = !filenamePrinter.active();
-			diff.progressCallback = &progressCallback;
+			diff.filemapNeedNames = filenamePrinter.active();
+			diff.filemapListDirty = filenamePrinter.active();
+			if (progress)
+				diff.progressCallback = &progressCallback;
 			diff.scan();
 			srcSelect = std::move(diff.srcDiff);
 			filemap = std::move(diff.filemap);
@@ -787,7 +788,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	clproc->ASYNC_BATCH_LEN = asyncBatchLen;
 	clproc->ASYNC_QUEUE_DEPTH = asyncQueueDepth;
 	if (clproc) {
-		clproc->progressCallback = &progressCallback;
+		if (progress)
+			clproc->progressCallback = &progressCallback;
 		if (auto cldiff = dynamic_cast<ClusterDiffComparer*>(clproc.get())) {
 			cldiff->verbose = verbose;
 			cldiff->printProgressDetails = verbose;
