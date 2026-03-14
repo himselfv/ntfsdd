@@ -513,6 +513,12 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 
+	//Human readable sizes
+	app.add_flag("--human-readable", LogPrinter::humanReadableSizes, "Print sizes in human-readable values instead of always in bytes.")
+		->group("Output options")
+		->capture_default_str()
+		;
+
 
 	//In List mode, prints selected clusters. In Compare/Rvw modes prints changed clusters.
 	ClusterPrinter clusterPrinter;
@@ -540,7 +546,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	//In List mode, this is going to print *selected* files. In Compare/Rvw, the files with actual *differences* (interspersed with clusters)
 	//Note that this will not print DELETED files. The comparison is one-way.
 	FilePrinter filenamePrinter;
-	app.add_flag("--print-files", filenamePrinter.outputFile, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
+	app.add_option("--print-files", filenamePrinter.outputFile, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
 		->group("Output options")
 		->expected(0, 0)
 		->default_str("-")
@@ -743,7 +749,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		if ((action == DdAction::List || action == DdAction::Copy))
 			clusterPrinter.print(srcSelect);
 		candidateClusterCount = srcSelect.bitCount();
-		qInfo() << "Selected cluster count: " << candidateClusterCount << std::endl;
+		qInfo() << "Selected cluster count: " << candidateClusterCount << ", size: " << dataSizeToStr(candidateClusterCount*src.volumeData().BytesPerCluster) << std::endl;
 
 		//Safety: Verify that our resulting list contains all clusters unique to srcBitmap (that is, switched to 1 since destBitmap).
 		//If $Bitmap shows a block was turned from free to used, stop. That should not happen if I'm parsing MFT correctly.
@@ -801,7 +807,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	}
 	if (action == DdAction::Compare || action == DdAction::Rcw) {
 		diffClusterCount = ((ClusterDiffComparer&)(*clproc)).stats.clustersDiffCount;
-		qInfo() << "Diff clusters: " << diffClusterCount << std::endl;
+		qInfo() << "Diff clusters: " << diffClusterCount << ", size: " << dataSizeToStr(diffClusterCount*src.volumeData().BytesPerCluster) << std::endl;
 	}
 	clproc.reset();
 
@@ -824,11 +830,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			std::string filename = fi.second.filename;
 			if (filename.empty())
 				filename = std::string{ "#" }+std::to_string(fi.first);
-			filenamePrinter.printOne(filename + "\t" + std::to_string(bitCount));
+			filenamePrinter.printOne(filename + "\t" + std::to_string(bitCount) + "\t" + dataSizeToStr(bitCount*src.volumeData().BytesPerCluster));
 			diffClustersInFilesTotal += bitCount;
 		}
 		//Must match diffClusterCount
-		qInfo() << "Clusters in diff files:" << diffClustersInFilesTotal << std::endl;
+		qInfo() << "Clusters in diff files: " << diffClustersInFilesTotal << std::endl;
+		if (diffClustersInFilesTotal != diffClusterCount)
+			qWarning() << "Clusters in diff files don't match diff clusters! We're probably parsing something wrong but it's too late to bug out now.";
 	}
 
 

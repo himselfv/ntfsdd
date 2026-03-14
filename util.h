@@ -101,6 +101,7 @@ class LogPrinter {
 public:
 	static Verbosity verbosity;
 	static NullStream g_nullStream;
+	static bool humanReadableSizes;
 };
 
 //Steal Qt's names because everyone knows them
@@ -109,6 +110,9 @@ public:
 #define qInfo() (((int)LogPrinter::verbosity >= (int)Verbosity::Info) ? std::cerr : LogPrinter::g_nullStream)
 #define qWarning() (((int)LogPrinter::verbosity >= (int)Verbosity::Warning) ? std::cerr : LogPrinter::g_nullStream) << "WARNING: "
 #define qError() (((int)LogPrinter::verbosity >= (int)Verbosity::Error) ? std::cerr : LogPrinter::g_nullStream) << "ERROR: "
+
+
+std::string dataSizeToStr(size_t sizeInBytes);
 
 
 class ProgressCallback {

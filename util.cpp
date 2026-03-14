@@ -11,6 +11,25 @@
 
 Verbosity LogPrinter::verbosity = Verbosity::Info;
 NullStream LogPrinter::g_nullStream;
+bool LogPrinter::humanReadableSizes = false;
+
+
+std::string dataSizeToStr(size_t sizeInBytes)
+{
+	if (!LogPrinter::humanReadableSizes)
+		return std::to_string(sizeInBytes);
+
+	static std::string SizeDegrees[7] { "b", "Kb", "Mb", "Gb", "Tb", "Pb" };
+
+	int idx = 0;
+	while (sizeInBytes > 0 && idx < 7) {
+		if (sizeInBytes < 1024)
+			return std::to_string(sizeInBytes) + SizeDegrees[idx];
+		sizeInBytes /= 1024;
+		idx++;
+	}
+	return std::to_string(sizeInBytes) + SizeDegrees[idx];
+}
 
 
 std::string wcharToUtf8(const std::wstring& input)
