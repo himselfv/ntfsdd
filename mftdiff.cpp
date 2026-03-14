@@ -73,6 +73,9 @@ void MftDiff::verifyMftRunsCompatible()
 	}
 }
 
+//#define MFTDIFF_EXTRA_CHECKS
+//For when you're looking for the impossible
+
 void MftDiff::scan()
 {
 	//Убеждаемся, что конфигурация диска одна и та же
@@ -83,7 +86,10 @@ void MftDiff::scan()
 
 	this->verifyMftRunsCompatible();
 
+#ifdef MFTDIFF_EXTRA_CHECKS
 	LCN totalUsedClusters = 0;
+	LCN totalDirtyClusters = 0;
+#endif
 
 	srcUsed.resize(TotalClusters);
 	srcUsed.clear_all();
@@ -106,12 +112,16 @@ void MftDiff::scan()
 	auto destIter = SegmentIter(&mftDest);
 	auto destIt = destIter.begin();
 
+#ifdef MFTDIFF_EXTRA_CHECKS
 	auto test = &*srcIt;
 	test = nullptr;
+#endif
 
 	for (; srcIt != srcIter.end(); ++srcIt) {
+#ifdef MFTDIFF_EXTRA_CHECKS
 		assert(test != &*srcIt); // verify progression
 		test = &*srcIt;
+#endif
 		segmentNo++;
 		if (segmentNo % 1000 == 0) this->onProgress(segmentNo, totalSegments);
 		if (this->progressCallback)
@@ -159,13 +169,17 @@ void MftDiff::scan()
 		//Дальше выясняем, является ли этот сегмент особым.
 		//Простые сегменты можно сразу же помечать по кластерам. Для особых нужно добавить их кластеры в базовую запись.
 		//Выяснить, что кластер особый, иногда можно сразу (base_segment), а иногда только после перебора атрибутов.
-		SegmentNumber baseSegmentNumber = (*srcIt).BaseFileRecordSegment.SegmentNumberLowPart + ((*srcIt).BaseFileRecordSegment.SegmentNumberHighPart << sizeof(ULONG));
+
+		//0 is a valid segment number but sequenceNumber==0 is reserved so segment:sequence==0:0 safely indicates "not set".
+		SegmentNumber baseSegmentNumber = -1; //We use -1 for the same here
+		if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
+			baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
 
 		//SequenceNumber не особо важен в этих целях.
 		//Можно было бы попытаться что-то сделать за одну итерацию атрибутов, но тогда пришлось бы сохранять отдельно все увиденные runs,
 		//т.к. в любой момент может выйти, что их всё-таки надо было в *какой-то* записи регистрировать.
 		//Пробежать лишний раз по атрибутам дешевле этих операций с памятью.
-		if (!baseSegmentNumber)
+		if (baseSegmentNumber < 0)
 			for (auto& attr : AttributeIterator(&(*srcIt)))
 				if (attr.TypeCode == $ATTRIBUTE_LIST) {
 					baseSegmentNumber = segmentNo;
@@ -180,8 +194,9 @@ void MftDiff::scan()
 		//Для третьего пункта обращаться придётся в любом случае.
 
 		FileEntry* segmentEntry = nullptr;
-		if (baseSegmentNumber != 0) {
+		if (baseSegmentNumber >= 0) {
 			segmentEntry = &filemap[baseSegmentNumber];
+			assert(segmentEntry->multisegment || segmentEntry->totalClusters == 0); //Either it's new or already multisegment
 			segmentEntry->multisegment = true;
 			stats.multiSegments++;
 		} else if (dirty && this->filemapListDirty) {
@@ -191,8 +206,12 @@ void MftDiff::scan()
 			if (it == filemap.end()) {
 				segmentEntry = &tempSegmentEntry;
 				segmentEntry->reset();
-			} else
+			} else {
 				segmentEntry = &it->second;
+				//If this entry has been marked dirty ahead of time, respect that and mark its clusters dirty.
+				if (segmentEntry->dirty)
+					dirty = true;
+			}
 		}
 
 		if (dirty)
@@ -215,10 +234,13 @@ void MftDiff::scan()
 				assert_eq(srcUsed.bitCount(run.offset, run.offset + run.length - 1), run.length);
 				segmentEntry->totalClusters += run.length;
 				segmentEntry->runList.push_back(run);
+#ifdef MFTDIFF_EXTRA_CHECKS
 				totalUsedClusters += run.length;
+				if (dirty && !segmentEntry->multisegment)
+					totalDirtyClusters += run.length;
+#endif
 			}
 		}
-
 
 		//Простые файлы отмечаем немедленно:
 		if (dirty && !segmentEntry->multisegment)
@@ -227,10 +249,22 @@ void MftDiff::scan()
 
 	//Теперь проходим filemap и выставляем все кластеры от файлов, у которых хотя бы один сегмент dirty.
 	for (auto& pair : filemap)
-		if (pair.second.dirty && pair.second.multisegment)
+		if (pair.second.dirty && pair.second.multisegment) {
 			this->onDirtyFile(pair.first, pair.second);
+			totalDirtyClusters += pair.second.totalClusters;
+		}
 
-	qVerbose() << "Total used clusters: " << totalUsedClusters << std::endl;
+#ifdef MFTDIFF_EXTRA_CHECKS
+	qDebug() << "Total used clusters: " << totalUsedClusters << std::endl;
+	qDebug() << "Total dirty clusters: " << totalDirtyClusters << std::endl;
+
+	size_t totalDirtyClustersAgain = 0;
+	for (auto& pair : filemap)
+		if (pair.second.dirty) {
+			totalDirtyClustersAgain += pair.second.totalClusters;
+		}
+	qDebug() << "Total dirty clusters: " << totalDirtyClustersAgain << std::endl;
+#endif
 }
 
 void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)

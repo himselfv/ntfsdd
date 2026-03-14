@@ -61,9 +61,15 @@ static constexpr USHORT BIOS_PARAMETER_BLOCK_SIZE_FOR_CHECKSUM = 0x80;
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
 typedef struct _MFT_SEGMENT_REFERENCE {
-  ULONG  SegmentNumberLowPart;
-  USHORT SegmentNumberHighPart;
-  USHORT SequenceNumber;
+	union {
+		struct CLASSIC_SEGMENT_REFERENCE {
+			ULONG  SegmentNumberLowPart;
+			USHORT SegmentNumberHighPart;
+			USHORT SequenceNumber;
+		} classic;
+		ULONGLONG mergedValue;
+	};
+	inline ULONGLONG segmentNumber() { return classic.SegmentNumberLowPart + (classic.SegmentNumberHighPart << sizeof(ULONG)); }
 } MFT_SEGMENT_REFERENCE, *PMFT_SEGMENT_REFERENCE;
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
