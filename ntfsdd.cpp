@@ -281,7 +281,7 @@ void compareVolumeParams(Volume& a, Volume& b, bool safety_override)
 	auto& bvd = b.volumeData();
 	auto safetyTest2 = [safety_override](bool condition, const std::string& message) {
 		if (condition) return;
-		if (safety_override) std::cerr << "WARNING: Volumes differ: " << message;
+		if (safety_override) qWarning() << "Volumes differ: " << message;
 		else throw std::runtime_error(std::string{"Volumes differ: "}+message);
 	};
 	auto safetyTest = [safety_override](uint64_t val_a, uint64_t val_b, const std::string& message) {
@@ -289,7 +289,7 @@ void compareVolumeParams(Volume& a, Volume& b, bool safety_override)
 		std::string fullMessage = std::string{ "Volumes differ: " }+message
 			+ std::string{ ". A=" } +std::to_string(val_a)
 			+ std::string{ ", B=" } +std::to_string(val_b);
-		if (safety_override) std::cerr << "WARNING: " << fullMessage;
+		if (safety_override) qWarning() << fullMessage;
 		else throw std::runtime_error(fullMessage);
 	};
 
@@ -563,13 +563,35 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		->capture_default_str()
 		;
 
+	bool quiet = false;
+	app.add_flag("--quiet", quiet, "Only print warnings and above.")
+		->group("Output options")
+		->capture_default_str()
+		;
+
 	bool verbose = false;
 	app.add_flag("--verbose", verbose, "Detailed logging.")
 		->group("Output options")
 		->capture_default_str()
 		;
 
+	bool debug = false;
+	app.add_flag("--debug", debug, "Extra detailed logging.")
+		->group("Output options")
+		->capture_default_str()
+		;
+
+
 	CLI11_PARSE(app, argc, argv);
+
+	if (debug)
+		LogPrinter::verbosity = Verbosity::Debug;
+	else if (verbose)
+		LogPrinter::verbosity = Verbosity::Verbose;
+	else if (!quiet)
+		LogPrinter::verbosity = Verbosity::Info;
+	else
+		LogPrinter::verbosity = Verbosity::Warning;
 
 	bool bNeedsWrites = (action == DdAction::Copy || action == DdAction::Rcw);
 
@@ -577,27 +599,25 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	bool bBlankTarget = (action == DdAction::Copy && (mode == DdMode::All||mode==DdMode::Bitmap)) && bBlankOverwrite;
 
 	if (bVssWritersParticipation && !bVssCreateSourceShadow)
-		std::cerr << "Warning: --shadow-writers without --shadow, ignored." << std::endl;
+		qWarning() << "--shadow-writers without --shadow, ignored." << std::endl;
 
 
 	// Before we open handles, auto-create the shadow
 	std::unique_ptr<VssShadowCopy> srcShadow;
 	if (bVssCreateSourceShadow) {
-		std::cerr << "VSS: Creating shadow copy for " << srcPath << std::endl;
+		qInfo() << "VSS: Creating shadow copy for " << srcPath << std::endl;
 		//This initializes COM so only try to create when asked to.
 		srcShadow.reset(new VssShadowCopy());
 		srcShadow->setSnapshotMode(bVssWritersParticipation ? VssSnapshotMode::WriterBackup : VssSnapshotMode::NonWriterBackup);
 		srcShadow->create(utf8ToWchar(srcPath));
 		auto snapshotPath = wcharToUtf8(srcShadow->snapshotPath());
-		std::cerr << "VSS: Shadow copy for " << srcPath << " created at: " << snapshotPath << std::endl;
+		qInfo() << "VSS: Shadow copy for " << srcPath << " created at: " << snapshotPath << std::endl;
 		srcPath = snapshotPath;
 	}
 
 
-	if (verbose) {
-		std::cerr << "Source: " << srcPath << std::endl;
-		std::cerr << "Dest: " << destPath << std::endl;
-	}
+	qVerbose() << "Source: " << srcPath << std::endl;
+	qVerbose() << "Dest: " << destPath << std::endl;
 
 	// Open Handles
 	bool srcIsVolume = verifyMountPoints(srcPath, verbose, false);
@@ -624,9 +644,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	// 2. Prepare Target (Lock and Dismount)
-	std::cerr << "Locking src..." << std::endl;
+	qInfo() << "Locking src..." << std::endl;
 	VolumeLock srcLock(src, !srcIsVolume && !bForceLockSrc);
-	std::cerr << "Locking dest..." << std::endl;
+	qInfo() << "Locking dest..." << std::endl;
 	VolumeLock dstLock(dest, !destIsVolume && !bForceLockDest);
 
 	/*
@@ -637,26 +657,26 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	But we don't really need to dismount, as NTFS "treats locked volumes as dismounted".
 	So we're already in a more powerful state.
 	DWORD bytesReturned;
-	std::cerr << "Dismounting dest..." << std::endl;
+	qVerbose() << "Dismounting dest..." << std::endl;
 	if (!dest.ioctl(FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
 		throwLastOsError("FSCTL_DISMOUNT_VOLUME");
 	*/
 
 	// Open and scan MFT
-	std::cerr << "Loading MFT structures..." << std::endl;
+	qInfo() << "Loading MFT structures..." << std::endl;
 	src.mft.load();
 	if (!bBlankTarget)
 		dest.mft.load();
 	else
 		dest.mft.loadMinimal();
 
-	std::cerr << "Loading stored bitmap..." << std::endl;
+	qVerbose() << "Loading stored bitmap..." << std::endl;
 	NtfsBitmapFile srcBitmap(&src, &src.mft);
 	std::unique_ptr<NtfsBitmapFile> destBitmap{ nullptr };
 	if (!bBlankTarget)
 		destBitmap.reset(new NtfsBitmapFile(&dest, &dest.mft));
 
-	std::cerr << "Verifying MFT layouts..." << std::endl;
+	qInfo() << "Verifying MFT layouts..." << std::endl;
 	verifyMftLayout(src, src.mft, srcBitmap.buf);
 	if (!bBlankTarget)
 		verifyMftLayout(dest, dest.mft, nullptr);
@@ -666,13 +686,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	MftDiff::Filemap filemap;
 
 	if (action == DdAction::VerifyBitmap) {
-		std::cerr << "Recalculating $Bitmap..." << std::endl;
+		qInfo() << "Recalculating $Bitmap..." << std::endl;
 		auto t1 = GetTickCount();
 		rebuildVolumeBitmap(src, src.mft, &srcUsed);
-		std::cerr << "Time: " <<  (GetTickCount() - t1) << std::endl;
+		qVerbose() << "Time: " <<  (GetTickCount() - t1) << std::endl;
 	}
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rcw) {
-		std::cerr << "Building file table bitmaps..." << std::endl;
+		qInfo() << "Building file table bitmaps..." << std::endl;
 		auto t1 = GetTickCount();
 		switch (mode) {
 		case DdMode::All:
@@ -685,7 +705,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 				srcSelect.set(run);
 			break;
 		case DdMode::MFT: {
-			std::cerr << "Reading MFT segments..." << std::endl;
+			qVerbose() << "Reading MFT segments..." << std::endl;
 			ConsoleProgressCallback progressCallback("Reading MFT");
 			progressCallback.setOnceEvery(1000);
 			MftDiff diff(src.mft, dest.mft);
@@ -696,22 +716,19 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			diff.scan();
 			srcSelect = std::move(diff.srcDiff);
 			filemap = std::move(diff.filemap);
-			std::cerr << "Used segments: " << diff.stats.usedSegments << std::endl;
-			std::cerr << "Dirty segments: " << diff.stats.dirtySegments << std::endl;
-			if (verbose)
-				std::cerr << "Multisegments: " << diff.stats.multiSegments << std::endl;
+			qInfo() << "Segments: used=" << diff.stats.usedSegments << ", dirty=" << diff.stats.dirtySegments << std::endl;
+			qVerbose() << "Multisegments: " << diff.stats.multiSegments << std::endl;
 			break;
 		}
 		}
-		std::cerr << "Time: " << (GetTickCount() - t1) << std::endl;
+		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
 
 	//Verify our manual cluster usage map matches $Bitmap, if we have it from VerifyBitmap or any task with select==MFT.
 	//Be quiet on success in non-VerifyBitmap modes.
 	if (srcUsed.size > 0) {
-		if (verbose)
-			std::cerr << "Verifying file table bitmap..." << std::endl;
+		qVerbose() << "Verifying file table bitmap..." << std::endl;
 		auto cmp = compareBitmaps(srcBitmap.buf, &srcUsed);
 		if (!cmp)
 			throw std::runtime_error(std::string{ "Manually constructed bitmap is not identical to the NTFS one!" });
@@ -725,7 +742,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		if ((action == DdAction::List || action == DdAction::Copy))
 			clusterPrinter.print(srcSelect);
 		candidateClusterCount = srcSelect.bitCount();
-		std::cerr << "Selected cluster count: " << candidateClusterCount << std::endl;
+		qInfo() << "Selected cluster count: " << candidateClusterCount << std::endl;
 
 		//Safety: Verify that our resulting list contains all clusters unique to srcBitmap (that is, switched to 1 since destBitmap).
 		//If $Bitmap shows a block was turned from free to used, stop. That should not happen if I'm parsing MFT correctly.
@@ -734,7 +751,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap());
 		else
 			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
-		std::cerr << "Time: " << (GetTickCount() - t1) << std::endl;
+		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
 
@@ -778,11 +795,11 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		}
 		auto t1 = GetTickCount();
 		clproc->process(srcSelect);
-		std::cerr << "Time: " << (GetTickCount() - t1) << std::endl;
+		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 	if (action == DdAction::Compare || action == DdAction::Rcw) {
 		diffClusterCount = ((ClusterDiffComparer&)(*clproc)).stats.clustersDiffCount;
-		std::cerr << "Diff clusters: " << diffClusterCount << std::endl;
+		qInfo() << "Diff clusters: " << diffClusterCount << std::endl;
 	}
 	clproc.reset();
 
@@ -809,7 +826,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			diffClustersInFilesTotal += bitCount;
 		}
 		//Must match diffClusterCount
-		std::cerr << "Clusters in diff files:" << diffClustersInFilesTotal << std::endl;
+		qInfo() << "Clusters in diff files:" << diffClustersInFilesTotal << std::endl;
 	}
 
 
@@ -833,7 +850,7 @@ int main(int argc, char* argv[]) {
 		main2(argc, argv);
 	}
 	catch (const std::exception& e) {
-		std::cerr << e.what();
+		qError() << e.what();
 		return -1;
 	}
 }

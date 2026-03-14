@@ -9,6 +9,9 @@
 #include <codecvt>
 
 
+Verbosity LogPrinter::verbosity = Verbosity::Info;
+NullStream LogPrinter::g_nullStream;
+
 
 std::string wcharToUtf8(const std::wstring& input)
 {

@@ -141,7 +141,7 @@ void ClusterDiffComparer::onProgress(LCN lcn)
 	this->m_progress_tm += t2;
 
 	if (printProgressDetails)
-		std::cerr << "Clusters: " << stats.clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount / t2 << ", rpm=" << (double)thisRunCount / t2 << std::endl;
+		qDebug() << "Clusters: " << stats.clustersChecked << ", runs: " << thisRunCount << ", t=" << t2 << ", cpm=" << (double)thisClusterCount / t2 << ", rpm=" << (double)thisRunCount / t2 << std::endl;
 	this->m_progress_prevStats = this->stats;
 }
 

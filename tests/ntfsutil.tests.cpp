@@ -5,14 +5,14 @@
 int rand_int(int min, int max)
 {
 	double pt = (double)rand() / RAND_MAX;
-	return min + (pt) * max;
+	return min + (int)(pt * max);
 }
 
 void randomFill(Bitmap& bmp)
 {
 	for (size_t i = 0; i < 100; i++) {
-		int len = rand_int(0, bmp.size / 100);
-		int start = rand_int(0, bmp.size - len - 1);
+		int len = rand_int(0, (int)(bmp.size / 100));
+		int start = rand_int(0, (int)(bmp.size - len - 1));
 		bmp.set(ClusterRun{ start, len });
 	}
 }

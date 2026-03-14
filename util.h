@@ -59,6 +59,7 @@ inline HRESULT comCheck(HRESULT hr, const char* context) {
 
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
+#undef assert
 #define assert(COND) \
 	do { \
     if(!(COND)) throw std::runtime_error( \
@@ -69,6 +70,45 @@ inline HRESULT comCheck(HRESULT hr, const char* context) {
 
 std::string wcharToUtf8(const std::wstring& input);
 std::wstring utf8ToWchar(const std::string& input);
+
+
+enum Verbosity {
+	Error = 0,
+	Warning,
+	Info,
+	Verbose,
+	Debug
+};
+
+
+class NullBuffer : public std::streambuf {
+public:
+	int overflow(int c) override {
+		return std::char_traits<char>::not_eof(c);
+	}
+};
+
+struct NullStream : public std::ostream {
+public:
+	NullStream() : std::ostream(&buffer) {}
+	template <typename T>
+	const NullStream& operator<<(const T&) const { return *this; }
+private:
+	NullBuffer buffer;
+};
+
+class LogPrinter {
+public:
+	static Verbosity verbosity;
+	static NullStream g_nullStream;
+};
+
+//Steal Qt's names because everyone knows them
+#define qDebug() (((int)LogPrinter::verbosity >= (int)Verbosity::Debug) ? std::cerr : LogPrinter::g_nullStream)
+#define qVerbose() (((int)LogPrinter::verbosity >= (int)Verbosity::Verbose) ? std::cerr : LogPrinter::g_nullStream)
+#define qInfo() (((int)LogPrinter::verbosity >= (int)Verbosity::Info) ? std::cerr : LogPrinter::g_nullStream)
+#define qWarning() (((int)LogPrinter::verbosity >= (int)Verbosity::Warning) ? std::cerr : LogPrinter::g_nullStream) << "WARNING: "
+#define qError() (((int)LogPrinter::verbosity >= (int)Verbosity::Error) ? std::cerr : LogPrinter::g_nullStream) << "ERROR: "
 
 
 class ProgressCallback {
