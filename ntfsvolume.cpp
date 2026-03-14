@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include "ntfsvolume.h"
 #include "ntfsmft.h"
 #include "mftutil.h"
@@ -51,10 +51,10 @@ Volume::~Volume()
 
 
 /*
-Âñå ôóíêöèè, êîòîðûå ïðèíèìàþò overlapped, áóäóò ðàáîòàòü è åñëè åãî íå ïåðåäàòü.
-Ñî âíåøíèì overlapped âñå îíè âîçâðàùàþò TRUE, åñëè ïîëó÷èëè ERROR_IO_PENDING, òî åñòü,
-åñëè âû ïåðåäàëè ñâîé overlapped, òî äîëæíû ïðè TRUE âñåãäà äåëàòü GetOverlappedResult.
-Ýòî íå èäåàëüíî, åñëè ôóíêöèÿ âûïîëíèëàñü ñðàçó æå, íî òàê ïðîùå äëÿ âûçûâàþùèõ.
+Ð’ÑÐµ Ñ„ÑƒÐ½ÐºÑ†Ð¸Ð¸, ÐºÐ¾Ñ‚Ð¾Ñ€Ñ‹Ðµ Ð¿Ñ€Ð¸Ð½Ð¸Ð¼Ð°ÑŽÑ‚ overlapped, Ð±ÑƒÐ´ÑƒÑ‚ Ñ€Ð°Ð±Ð¾Ñ‚Ð°Ñ‚ÑŒ Ð¸ ÐµÑÐ»Ð¸ ÐµÐ³Ð¾ Ð½Ðµ Ð¿ÐµÑ€ÐµÐ´Ð°Ñ‚ÑŒ.
+Ð¡Ð¾ Ð²Ð½ÐµÑˆÐ½Ð¸Ð¼ overlapped Ð²ÑÐµ Ð¾Ð½Ð¸ Ð²Ð¾Ð·Ð²Ñ€Ð°Ñ‰Ð°ÑŽÑ‚ TRUE, ÐµÑÐ»Ð¸ Ð¿Ð¾Ð»ÑƒÑ‡Ð¸Ð»Ð¸ ERROR_IO_PENDING, Ñ‚Ð¾ ÐµÑÑ‚ÑŒ,
+ÐµÑÐ»Ð¸ Ð²Ñ‹ Ð¿ÐµÑ€ÐµÐ´Ð°Ð»Ð¸ ÑÐ²Ð¾Ð¹ overlapped, Ñ‚Ð¾ Ð´Ð¾Ð»Ð¶Ð½Ñ‹ Ð¿Ñ€Ð¸ TRUE Ð²ÑÐµÐ³Ð´Ð° Ð´ÐµÐ»Ð°Ñ‚ÑŒ GetOverlappedResult.
+Ð­Ñ‚Ð¾ Ð½Ðµ Ð¸Ð´ÐµÐ°Ð»ÑŒÐ½Ð¾, ÐµÑÐ»Ð¸ Ñ„ÑƒÐ½ÐºÑ†Ð¸Ñ Ð²Ñ‹Ð¿Ð¾Ð»Ð½Ð¸Ð»Ð°ÑÑŒ ÑÑ€Ð°Ð·Ñƒ Ð¶Ðµ, Ð½Ð¾ Ñ‚Ð°Ðº Ð¿Ñ€Ð¾Ñ‰Ðµ Ð´Ð»Ñ Ð²Ñ‹Ð·Ñ‹Ð²Ð°ÑŽÑ‰Ð¸Ñ….
 */
 
 BOOL Volume::ioctl(_In_ DWORD dwIoControlCode,
@@ -416,15 +416,15 @@ bool Volume::queryStorageAlignment(STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR* alignmen
 /*
 https://community.osr.com/t/locking-ntfs-volume-dismounts-it/16419/9
 > FSCTL_GET_VOLUME_BITMAP for NTFS volumes succeeds only if either
-> - you don’t lock the volume at all
+> - you donâ€™t lock the volume at all
 > - or set dwShareMode in CreateFile to FILE_SHARE_READ or zero and lock it
-> However, this doesn’t look right. The docs say that for FSCTL_LOCK_VOLUME,
+> However, this doesnâ€™t look right. The docs say that for FSCTL_LOCK_VOLUME,
 > you must set dwShareMode in CreateFile to FILE_SHARE_READ | FILE_SHARE_WRITE.
 From my experience, this also applies to shadow copies.
 
 People advise:
 > If you open volume with share access 0 file system will effectively lock the
-> volume for you - you don’t need to issue FSCTL_LOCK_VOLUME.
+> volume for you - you donâ€™t need to issue FSCTL_LOCK_VOLUME.
 > This open fails if there are some handles opened on the volume and
 > subsequent open requests will fail while volume is opened.
 Might not be quite right. Kernel mode actors might still consider it unlocked? Idk.

@@ -34,6 +34,29 @@ inline void throwLastOsError(const std::string& message) {
 #define OSCHECKBOOL(...) if(!__VA_ARGS__) throwLastOsError(#__VA_ARGS__);
 
 
+class ComError : public std::runtime_error {
+protected:
+	HRESULT m_errorCode = 0;
+public:
+	ComError(HRESULT errorCode, const std::string& message)
+		: m_errorCode(errorCode), std::runtime_error(message)
+	{}
+	inline HRESULT errorCode() { return this->m_errorCode; }
+};
+
+inline void throwComError(HRESULT err) {
+	throw ComError(err, std::string{ "HRESULT = " }+std::to_string(err));
+}
+inline void throwComError(HRESULT err, const std::string& message) {
+	throw ComError(err, message + std::string{ "\nHRESULT = " }+std::to_string(err));
+}
+inline HRESULT comCheck(HRESULT hr, const char* context) {
+	if (FAILED(hr)) throwComError(hr, context);
+	return hr;
+}
+#define HRCHECK(...) comCheck(__VA_ARGS__, #__VA_ARGS__)
+
+
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 #define assert(COND) \
@@ -42,6 +65,10 @@ inline void throwLastOsError(const std::string& message) {
         std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ": " #COND) \
     ); \
 	} while (0)
+
+
+std::string wcharToUtf8(const std::wstring& input);
+std::wstring utf8ToWchar(const std::string& input);
 
 
 class ProgressCallback {

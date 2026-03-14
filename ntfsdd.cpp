@@ -11,6 +11,7 @@
 #include "bitmap.h"
 #include "mftdiff.h"
 #include "clusterdiff.h"
+#include "vssutil.h"
 #include <CLI/CLI.hpp>
 
 
@@ -324,10 +325,10 @@ void countClusters(VOLUME_BITMAP_BUFFER* bitmapBuffer)
 
 void verifyMftLayout(Volume& vol, Mft& mft, const VOLUME_BITMAP_BUFFER* bitmap)
 {
-	//ѕровер€ем, что MFT более-менее закрывает собой весь диск.
+	//Verify that the MFT covers more or less the entire volume
 	auto& volData = vol.volumeData();
 
-	//–азмеры посекторно и покластерно могут различатьс€ с точностью до большего из них
+	//Sizes in sectors and in clusters may differ up to one of whichever is bigger.
 	int64_t totalBytes = volData.NumberSectors.QuadPart*volData.BytesPerSector;
 	auto totalBytesDiff = totalBytes - volData.TotalClusters.QuadPart*volData.BytesPerCluster;
 	assert(totalBytesDiff < ((volData.BytesPerCluster > volData.BytesPerSector) ? volData.BytesPerCluster : volData.BytesPerSector));
@@ -364,7 +365,7 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 		throw std::runtime_error("StartingLcn is not a multiple of a sufficiently beautiful number, I didn't expect that!");
 	return 0==Bitmap::memcmp(bmp1->Buffer, bmp2->data, bmp1->BitmapSize.QuadPart, 0, bmp1->StartingLcn.QuadPart);
 /*
-	ћедленна€, но более подробна€ верси€
+	Slow but more elaborate version:
 	auto diff = Bitmap(srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart) ^ srcUsed;
 	auto ret = diff.isZero();
 	if (!ret)
@@ -375,14 +376,14 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 
 
 /*
-Safety: ѕровер€ем, что наша карта кластеров дл€ проверки содержит, как минимум, все те кластеры, которые *добавились* в более новом битмапе.
+Safety: Verify that our candidate selection contains at least all the clusters that are set *only in the newer* bitmap.
 */
-void verifyDiffContainsNewClusters(CandidateClusterMap& srcDiff, const Bitmap& newlyUsedClusters)
+void verifySelectionContainsNewClusters(CandidateClusterMap& srcSelect, const Bitmap& newlyUsedClusters)
 {
-	//ѕоскольку srcDiff это сам по себе Bitmap, то и тут можем обойтись удобной массовой операцией.
-	auto remainder = newlyUsedClusters.andNot(srcDiff);
+	//srcSelect is also a Bitmap so we can do a handy mass op here.
+	auto remainder = newlyUsedClusters.andNot(srcSelect);
 	if (!remainder.isZero())
-		throw std::runtime_error("Assertion failed: some of the newly used clusters are not covered by the newly constructed difference map!");
+		throw std::runtime_error("Assertion failed: some of the newly used clusters are not covered by the constructed difference map!");
 }
 
 
@@ -398,7 +399,6 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	DdAction action{ DdAction::Compare };
 	app.add_option("action", action, "Action to take:\n  "+ enumNameDesc<DdAction>(":\t", "\n  "))
-//		->group("Main options")
 		->type_name(enumNames<DdAction>("|"))
 		->transform(CLI::CheckedTransformer(enumMap<DdAction>(), CLI::ignore_case).description(""))
 		->capture_default_str()
@@ -406,7 +406,6 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	DdMode mode{ DdMode::MFT };
 	app.add_option("--select", mode, "Selection method to use:\n " + enumNameDesc<DdMode>(":\t", "\n  "))
-//		->group("Main options")
 		->type_name(enumNames<DdMode>("|"))
 		->transform(CLI::CheckedTransformer(enumMap<DdMode>(), CLI::ignore_case).description(""))
 		->capture_default_str()
@@ -426,11 +425,28 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	std::string srcPath, destPath;
 	app.add_option("source, --source", srcPath, "Source device/file")
-//		->group("Main options")
 		->required();
 	app.add_option("destination, --dest", destPath, "Target device/file")
-//		->group("Main options")
 		->required();
+
+
+	//Create a temporary VSS shadow copy for the source.
+	bool bVssCreateSourceShadow = false;
+	app.add_flag("--shadow", bVssCreateSourceShadow,
+		"Create a temporary VSS shadow copy for the source. See VSS docs for which paths can be shadowed. "
+		"If you pass a manually-created shadow, do not set this flag."
+		)
+		->group("Access options")
+		->capture_default_str()
+		;
+	bool bVssWritersParticipation = false;
+	app.add_flag("--shadow-writers", bVssWritersParticipation,
+		"Use VSS_CTX_BACKUP instead of VSS_CTX_FILE_SHARE_BACKUP. Requires --shadow. Read the docs. Better more stable backup, but slower and more flaky shadow creation process itself."
+	)
+		->group("Access options")
+		->capture_default_str()
+		;
+
 
 
 	//We'll enforce FSCTL_LOCK_VOLUME where it seems reasonable and TRY it elsewhere.
@@ -447,20 +463,29 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 	bool bAllowWriteMounted = false;
-	app.add_flag("--unsafe-allow-mounted", bAllowWriteMounted, "Allow the destination volume to have drive letters and mount points. It is advised to never use this switch.\nOnly write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes.")
+	app.add_flag("--unsafe-allow-mounted", bAllowWriteMounted,
+		"Allow the destination volume to have drive letters and mount points. It is advised to never use this switch.\n"
+		"Only write to the volumes that you have manually dismounted, to prevent accidental overwriting of unintended volumes."
+		)
 		->group("Access options")
 		->capture_default_str()
 		;
 
 	bool bAllowNonMatching = false;
-	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching, "Continue even if the destination does not seem to be a clone of the source. You will likely wreak havoc and destroy unrelated volume by mistake, unless in a very well understood special case.")
+	app.add_flag("--unsafe-allow-non-matching", bAllowNonMatching,
+		"Continue even if the destination does not seem to be a clone of the source. You will likely wreak havoc "
+		"and destroy unrelated volume by mistake, unless in a very well understood special case."
+		)
 		->group("Access options")
 		->capture_default_str()
 		;
 
 	//Separate flag for skipping MFT checks in copy all mode only, as there it sometimes makes sense.
 	bool bBlankOverwrite = false;
-	app.add_flag("--overwrite", bBlankOverwrite, "Overwrite destination completely. Skip destination format checks. Only works for action==copy, selection==all|bitmap. Without this copy all/bitmap will still check the destination MFT.")
+	app.add_flag("--overwrite", bBlankOverwrite,
+		"Overwrite destination completely. Skip destination format checks. Only works for action==copy, selection==all|bitmap. "
+		"Without this copy all/bitmap will still check the destination MFT."
+		)
 		->group("Access options")
 		->capture_default_str()
 		;
@@ -489,8 +514,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 
-	//In List mode, this is going to print *selected* files. In Compare, the files with actual *differences* (interspersed with clusters)
-	//Note that this will not print DELETED files. The comparison is one-way.
+	//In List mode, prints selected clusters. In Compare/Rvw modes prints changed clusters.
 	ClusterPrinter clusterPrinter;
 	app.add_option("--print-clusters", clusterPrinter.outputFile, "In List and Compare modes, print selected and matching clusters respectively.")
 		->group("Output options")
@@ -513,6 +537,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 
+	//In List mode, this is going to print *selected* files. In Compare/Rvw, the files with actual *differences* (interspersed with clusters)
+	//Note that this will not print DELETED files. The comparison is one-way.
 	FilePrinter filenamePrinter;
 	app.add_flag("--print-files", filenamePrinter.outputFile, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
 		->group("Output options")
@@ -521,6 +547,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 	app.add_option("--print-files-to", filenamePrinter.outputFile, "Same as --print-files but allows you to specify a file.")
 		->group("Output options")
+		;
+
+
+	bool bReturnExitCode = false;
+	app.add_flag("--exit-code", bReturnExitCode, "Return non-zero exit code if there were differences (compare/rvw) or the selection had been non nil (list/copy). By default exit code is non-zero only on failures.")
+		->group("Output options")
+		->capture_default_str()
 		;
 
 
@@ -542,6 +575,29 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	//Skip destination format checks.
 	bool bBlankTarget = (action == DdAction::Copy && (mode == DdMode::All||mode==DdMode::Bitmap)) && bBlankOverwrite;
+
+	if (bVssWritersParticipation && !bVssCreateSourceShadow)
+		std::cerr << "Warning: --shadow-writers without --shadow, ignored." << std::endl;
+
+
+	// Before we open handles, auto-create the shadow
+	std::unique_ptr<VssShadowCopy> srcShadow;
+	if (bVssCreateSourceShadow) {
+		//This initializes COM so only try to create when asked to.
+		srcShadow.reset(new VssShadowCopy());
+		srcShadow->setSnapshotMode(bVssWritersParticipation ? VssSnapshotMode::WriterBackup : VssSnapshotMode::NonWriterBackup);
+		std::cerr << "VSS: Creating shadow copy for " << srcPath << std::endl;
+		srcShadow->create(utf8ToWchar(srcPath));
+		auto snapshotPath = wcharToUtf8(srcShadow->snapshotPath());
+		std::cerr << "VSS: Shadow copy for " << srcPath << " created at: " << snapshotPath << std::endl;
+		srcPath = snapshotPath;
+	}
+
+
+	if (verbose) {
+		std::cerr << "SOURCE: " << srcPath << std::endl;
+		std::cerr << "DEST: " << destPath << std::endl;
+	}
 
 	// Open Handles
 	bool srcIsVolume = verifyMountPoints(srcPath, verbose, false);
@@ -650,11 +706,12 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		std::cerr << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
-	//≈сли в результате VerifyBitmap или любого действи€ с mode==MFT расчитали карту кластеров, то сравниваем еЄ с $Bitmap.
-	//Ќо в не€вных случа€х молчим, если всЄ в пор€дке.
+
+	//Verify our manual cluster usage map matches $Bitmap, if we have it from VerifyBitmap or any task with select==MFT.
+	//Be quiet on success in non-VerifyBitmap modes.
 	if (srcUsed.size > 0) {
-		//”беждаемс€, что srcUsed действительно закрывает то же, что говорит $Bitmap.
-		std::cerr << "Verifying file table bitmap..." << std::endl;
+		if (verbose)
+			std::cerr << "Verifying file table bitmap..." << std::endl;
 		auto cmp = compareBitmaps(srcBitmap.buf, &srcUsed);
 		if (!cmp)
 			throw std::runtime_error(std::string{ "Manually constructed bitmap is not identical to the NTFS one!" });
@@ -670,13 +727,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		candidateClusterCount = srcSelect.bitCount();
 		std::cerr << "Selected cluster count: " << candidateClusterCount << std::endl;
 
-		//Safety: ѕровер€ем, что наш получившийс€ список содержит все кластеры srcBitmap, уникальные дл€ него (т.е. перешедшие в состо€ние 1 с момента destBitmap)
-		//If $Bitmap shows a block was turned from free to used, warn and copy it, as that should not happen if I'm parsing MFT correctly.
+		//Safety: Verify that our resulting list contains all clusters unique to srcBitmap (that is, switched to 1 since destBitmap).
+		//If $Bitmap shows a block was turned from free to used, stop. That should not happen if I'm parsing MFT correctly.
 		auto t1 = GetTickCount();
 		if (bBlankTarget)
-			verifyDiffContainsNewClusters(srcSelect, srcBitmap.asBitmap());
+			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap());
 		else
-			verifyDiffContainsNewClusters(srcSelect, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
+			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
 		std::cerr << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
 
@@ -760,11 +817,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	// Cleanup
 
 
-	//In List and Compare modes, return 0 only when there are no differences
-	if (action == DdAction::List && candidateClusterCount > 0)
-		return 1;
-	if (action == DdAction::Compare && diffClusterCount > 0)
-		return 1;
+	if (bReturnExitCode) {
+		//In List and Compare modes, return 0 only when there are no differences
+		if (action == DdAction::List && candidateClusterCount > 0)
+			return 1;
+		if (action == DdAction::Compare && diffClusterCount > 0)
+			return 1;
+	}
 
 	return 0;
 }
