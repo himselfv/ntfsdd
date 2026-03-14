@@ -583,10 +583,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	// Before we open handles, auto-create the shadow
 	std::unique_ptr<VssShadowCopy> srcShadow;
 	if (bVssCreateSourceShadow) {
+		std::cerr << "VSS: Creating shadow copy for " << srcPath << std::endl;
 		//This initializes COM so only try to create when asked to.
 		srcShadow.reset(new VssShadowCopy());
 		srcShadow->setSnapshotMode(bVssWritersParticipation ? VssSnapshotMode::WriterBackup : VssSnapshotMode::NonWriterBackup);
-		std::cerr << "VSS: Creating shadow copy for " << srcPath << std::endl;
 		srcShadow->create(utf8ToWchar(srcPath));
 		auto snapshotPath = wcharToUtf8(srcShadow->snapshotPath());
 		std::cerr << "VSS: Shadow copy for " << srcPath << " created at: " << snapshotPath << std::endl;
@@ -595,8 +595,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	if (verbose) {
-		std::cerr << "SOURCE: " << srcPath << std::endl;
-		std::cerr << "DEST: " << destPath << std::endl;
+		std::cerr << "Source: " << srcPath << std::endl;
+		std::cerr << "Dest: " << destPath << std::endl;
 	}
 
 	// Open Handles
