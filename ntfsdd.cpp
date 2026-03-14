@@ -363,15 +363,22 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 {
 	if (bmp1->StartingLcn.QuadPart % (sizeof(int64_t) * 8) != 0)
 		throw std::runtime_error("StartingLcn is not a multiple of a sufficiently beautiful number, I didn't expect that!");
-	return 0==Bitmap::memcmp(bmp1->Buffer, bmp2->data, bmp1->BitmapSize.QuadPart, 0, bmp1->StartingLcn.QuadPart);
-/*
-	Slow but more elaborate version:
-	auto diff = Bitmap(srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart) ^ srcUsed;
+/*	auto result = Bitmap::memcmp(bmp1->Buffer, bmp2->data, bmp1->BitmapSize.QuadPart, 0, bmp1->StartingLcn.QuadPart);
+	if (0 != result) {
+		Bitmap::printBuf(const_cast<byte*>(bmp1->Buffer), bmp1->BitmapSize.QuadPart);
+		const_cast<Bitmap*>(bmp2)->print();
+	}
+	return 0==result;*/
+
+//	Slow but more elaborate version: 
+	auto diff = Bitmap(const_cast<byte*>(bmp1->Buffer), bmp1->BitmapSize.QuadPart) ^ *const_cast<Bitmap*>(bmp2);
 	auto ret = diff.isZero();
 	if (!ret)
-		diff.print();
+		diff.printNonZero();
+	auto bit1 = bmp1->Buffer[6350872*8];
+	auto bit2 = bmp2->data[6350872];
 	return ret;
-*/
+
 }
 
 

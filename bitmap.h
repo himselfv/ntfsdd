@@ -8,6 +8,7 @@ struct BitmapBuf;
 struct Bitmap {
 public:
 	constexpr static size_t BLOCK_BITS = sizeof(uint64_t) * 8;
+
 	uint64_t* data = nullptr;
 	size_t size = 0; //Size in bits
 	Bitmap() {};
@@ -38,6 +39,8 @@ public:
 	BitmapBuf operator^(const Bitmap& other) const;
 
 	void print();
+	void printNonZero();
+	static void printBuf(void* buf, size_t size);
 };
 
 //Automatically managed buffer with bitmap access.

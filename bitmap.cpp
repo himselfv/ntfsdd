@@ -4,6 +4,12 @@
 #include <fstream>
 #include "util.h"
 
+//Bits are stored in low-bits-first order
+//All masks here are inclusive of both sides.
+#define MASK_BITSUNTIL(end_bit) (~0ULL >> (BLOCK_BITS - 1 - (end_bit)))
+#define MASK_BITSAFTER(start_bit) (~0ULL << (start_bit))
+#define MASK_BITSBETWEEN(L,R) MASK_BITSAFTER(L) & MASK_BITSUNTIL(R)
+
 
 void Bitmap::set(size_t lo, size_t hi) {
 	if (lo > hi) return;
@@ -16,16 +22,16 @@ void Bitmap::set(size_t lo, size_t hi) {
 
 	// The entire range is within a single 64-bit word
 	if (start_word == end_word) {
-		uint64_t mask = (~0ULL << start_bit) & (~0ULL >> (BLOCK_BITS - 1 - end_bit));
+		uint64_t mask = MASK_BITSBETWEEN(start_bit, end_bit);
 		data[start_word] |= mask;
 		return;
 	}
 
 	// Range spans multiple words
-	data[start_word] |= (~0ULL << start_bit);
+	data[start_word] |= MASK_BITSAFTER(start_bit);
 	if (end_word > start_word + 1)
 		std::memset(&data[start_word + 1], 0xFF, (end_word - start_word - 1) * sizeof(uint64_t));
-	data[end_word] |= (~0ULL >> (BLOCK_BITS - 1 - end_bit));
+	data[end_word] |= MASK_BITSUNTIL(end_bit);
 }
 
 void Bitmap::clear(size_t lo, size_t hi) {
@@ -38,23 +44,24 @@ void Bitmap::clear(size_t lo, size_t hi) {
 	size_t end_bit = hi % BLOCK_BITS;
 
 	if (start_word == end_word) {
-		uint64_t mask = (~0ULL << start_bit) & (~0ULL >> (BLOCK_BITS - 1 - end_bit));
+		uint64_t mask = MASK_BITSBETWEEN(start_bit, end_bit);
 		data[start_word] &= ~mask;
 		return;
 	}
 
 	// Range spans multiple words
-	data[start_word] &= ~(~0ULL << start_bit);
+	data[start_word] &= ~MASK_BITSAFTER(start_bit);
 	if (end_word > start_word + 1)
 		std::memset(&data[start_word + 1], 0x00, (end_word - start_word - 1) * sizeof(uint64_t));
-	data[end_word] &= ~(~0ULL >> (BLOCK_BITS - 1 - end_bit));
+	data[end_word] &= ~MASK_BITSUNTIL(end_bit);
 }
 void Bitmap::clear_all() {
 	this->clear(0, size - 1);
 }
 
 
-//Compares two bitmaps handling some edge cases
+//Compares two bitmaps handling some edge cases. Returns 0 on equality!
+//Offsets must start at a BLOCK_BITS boundary.
 int64_t Bitmap::memcmp(const void* bitmap1, const void* bitmap2, size_t bitcnt, size_t offset1, size_t offset2)
 {
 	if (offset1 >= 8) {
@@ -70,7 +77,7 @@ int64_t Bitmap::memcmp(const void* bitmap1, const void* bitmap2, size_t bitcnt, 
 	auto ret = std::memcmp(bitmap1, bitmap2, bitcnt);
 	if (ret != 0 || rem == 0) return ret;
 
-	rem = ~(~0ULL << rem);
+	auto mask = MASK_BITSUNTIL(rem-1);
 	return (((char*)bitmap1)[bitcnt] & rem) - (((char*)bitmap2)[bitcnt] & rem);
 }
 
@@ -80,17 +87,17 @@ void Bitmap::apply_operation1(Op64 op64)
 {
 	uint64_t* srcA = this->data;
 	size_t rem = this->size;
-	while (rem > BLOCK_BITS) {
+	while (rem >= BLOCK_BITS) {
 		if (!op64(srcA)) break;
 		rem -= BLOCK_BITS;
 		srcA++;
 	}
 	if (rem > 0) {
-		uint64_t tmpA = *srcA & ~(~0ULL << rem);
+		uint64_t tmpA = *srcA & MASK_BITSUNTIL(rem-1);
 		uint64_t tmpA2 = tmpA;
 		op64(&tmpA2);
 		if (tmpA2 != tmpA)
-			*srcA = (*srcA & (~0ULL << rem)) | (tmpA2 & ~(~0ULL << rem));
+			*srcA = (*srcA & ~MASK_BITSUNTIL(rem-1)) | (tmpA2 & MASK_BITSUNTIL(rem-1));
 	}
 }
 
@@ -104,36 +111,40 @@ void Bitmap::apply_operation1(Op64 op64, size_t first, size_t last)
 	last -= skip * BLOCK_BITS;
 
 	if (first <= 0) {
+		//Initial partial or full block starting at 0.
+		//If it's partial, we'll treat it as a final partial.
 	} else if (last < BLOCK_BITS) {
-		uint64_t tmpA = *srcA & (~0ULL << first) & ~(~0ULL << (last+1));
+		//The only one partial block
+		uint64_t tmpA = *srcA & MASK_BITSBETWEEN(first, last);
 		uint64_t tmpA2 = tmpA;
 		op64(&tmpA2);
 		if (tmpA2 != tmpA)
-			*srcA = (*srcA & ~(~0ULL << first) & ~(~0ULL << (last+1))) | (tmpA2 & (~0ULL << first) & ~(~0ULL << (last+1)));
+			*srcA = (*srcA & ~MASK_BITSBETWEEN(first, last)) | (tmpA2 & MASK_BITSBETWEEN(first, last));
 		srcA++;
 		first = last + 1;
 	} else {
-		uint64_t tmpA = *srcA & (~0ULL << first);
+		//Initial partial + more later
+		uint64_t tmpA = *srcA & MASK_BITSAFTER(first);
 		uint64_t tmpA2 = tmpA;
 		op64(&tmpA2);
 		if (tmpA2 != tmpA)
-			*srcA = (*srcA & ~(~0ULL << first)) | (tmpA2 & (~0ULL << first));
+			*srcA = (*srcA & ~MASK_BITSAFTER(first)) | (tmpA2 & MASK_BITSAFTER(first));
 		srcA++;
 		first = BLOCK_BITS;
 	}
 
 	size_t rem = last - first + 1;
-	while (rem > BLOCK_BITS) {
+	while (rem >= BLOCK_BITS) {
 		if (!op64(srcA)) break;
 		rem -= BLOCK_BITS;
 		srcA++;
 	}
-	if (rem > 0) {
-		uint64_t tmpA = *srcA & ~(~0ULL << rem);
+	if (rem > 0) { //Careful: bits 0..rem-1
+		uint64_t tmpA = *srcA & MASK_BITSUNTIL(rem-1);
 		uint64_t tmpA2 = tmpA;
 		op64(&tmpA2);
 		if (tmpA2 != tmpA)
-			*srcA = (*srcA & (~0ULL << rem)) | (tmpA2 & ~(~0ULL << rem));
+			*srcA = (*srcA & ~MASK_BITSUNTIL(rem-1)) | (tmpA2 & MASK_BITSUNTIL(rem-1));
 	}
 }
 
@@ -144,21 +155,21 @@ void Bitmap::apply_operation3(const Bitmap& other, Bitmap& result, Op64 op64) co
 	uint64_t* srcB = other.data;
 	uint64_t* dest = result.data;
 	size_t rem = this->size;
-	while (rem > sizeof(*dest) * 8) {
+	while (rem >= BLOCK_BITS) {
 		op64(srcA, srcB, dest);
-		rem -= sizeof(*dest) * 8;
+		rem -= BLOCK_BITS;
 		srcA++;
 		srcB++;
 		dest++;
 	}
 	if (rem > 0) {
-		uint64_t tmpA = *srcA & ~(~0ULL << rem);
-		uint64_t tmpB = *srcB & ~(~0ULL << rem);
-		uint64_t tmpDest = *dest & ~(~0ULL << rem);
+		uint64_t tmpA = *srcA & MASK_BITSUNTIL(rem-1);
+		uint64_t tmpB = *srcB & MASK_BITSUNTIL(rem-1);
+		uint64_t tmpDest = *dest & MASK_BITSUNTIL(rem-1);
 		uint64_t tmpDest2 = tmpDest;
 		op64(&tmpA, &tmpB, &tmpDest2);
 		if (tmpDest != tmpDest2)
-			*dest = (*dest & (~0ULL << rem)) | (tmpDest2 & ~(~0ULL << rem));
+			*dest = (*dest & ~MASK_BITSUNTIL(rem-1)) | (tmpDest2 & MASK_BITSUNTIL(rem-1));
 	}
 }
 
@@ -229,6 +240,38 @@ void Bitmap::print()
 	const_cast<Bitmap*>(this)->apply_operation1(
 		[&idx](uint64_t* ptr) { idx++; std::cerr << std::bitset<64>(*ptr) << std::endl; return true; }
 	);
+}
+
+void Bitmap::printNonZero()
+{
+	int64_t idx = 0;
+	bool span = false;
+	const_cast<Bitmap*>(this)->apply_operation1(
+		[&idx, &span](uint64_t* ptr) {
+			idx++;
+			if (*ptr == 0) {
+				if (span)
+					std::cerr << std::endl;
+				span = false;
+				return true;
+			}
+			if (!span)
+				std::cerr << std::to_string(idx) << ": ";
+			span = true;
+			std::cerr << std::bitset<64>(*ptr);
+//			std::cerr << std::bitset<64>(*ptr) << std::endl;
+			return true;
+		}
+	);
+	if (span)
+		std::cerr << std::endl;
+}
+
+
+void Bitmap::printBuf(void* buf, size_t size)
+{
+	Bitmap bmp{ buf, size };
+	bmp.print();
 }
 
 

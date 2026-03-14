@@ -83,6 +83,8 @@ void MftDiff::scan()
 
 	this->verifyMftRunsCompatible();
 
+	LCN totalUsedClusters = 0;
+
 	srcUsed.resize(TotalClusters);
 	srcUsed.clear_all();
 	srcDiff.resize(TotalClusters);
@@ -104,7 +106,12 @@ void MftDiff::scan()
 	auto destIter = SegmentIter(&mftDest);
 	auto destIt = destIter.begin();
 
+	auto test = &*srcIt;
+	test = nullptr;
+
 	for (; srcIt != srcIter.end(); ++srcIt) {
+		assert(test != &*srcIt); // verify progression
+		test = &*srcIt;
 		segmentNo++;
 		if (segmentNo % 1000 == 0) this->onProgress(segmentNo, totalSegments);
 		if (this->progressCallback)
@@ -198,11 +205,17 @@ void MftDiff::scan()
 				filenameReader.updateEntry(attr, segmentEntry);
 			if (attr.FormCode != NONRESIDENT_FORM) continue;
 			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE)) {
+				assert(run.offset >= 0);
 				//assert(run.offset >= 0 || (attr.Flags & ATTRIBUTE_FLAG_SPARSE)); //Sparse runs are supposed to only appear in sparse attributes!
 				//But no, $BadClus:$Bad has sparse runs even without this flag.
+				//Verify that no two files reference the same clusters:
+				assert(srcUsed.bitCount(run.offset, run.offset + run.length - 1) == 0);
 				srcUsed.set(run.offset, run.offset + run.length - 1);
+				//Verify that we can set bits and count them:
+				assert_eq(srcUsed.bitCount(run.offset, run.offset + run.length - 1), run.length);
 				segmentEntry->totalClusters += run.length;
 				segmentEntry->runList.push_back(run);
+				totalUsedClusters += run.length;
 			}
 		}
 
@@ -216,6 +229,8 @@ void MftDiff::scan()
 	for (auto& pair : filemap)
 		if (pair.second.dirty && pair.second.multisegment)
 			this->onDirtyFile(pair.first, pair.second);
+
+	qVerbose() << "Total used clusters: " << totalUsedClusters << std::endl;
 }
 
 void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)

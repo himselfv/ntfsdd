@@ -2,7 +2,7 @@
 #include "bitmap.h"
 #include "util.h"
 
-int rand_int(int min, int max)
+inline int rand_int(int min, int max)
 {
 	double pt = (double)rand() / RAND_MAX;
 	return min + (int)(pt * max);
