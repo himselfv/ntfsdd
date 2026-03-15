@@ -60,6 +60,9 @@ struct FileEntry {
 		this->totalClusters = 0;
 	}
 };
+//MftFilemap is a map because we often need just a bunch of entries
+typedef std::unordered_map<SegmentNumber, FileEntry> MftFilemap;
+
 
 struct FilenameEntry {
 	std::string filename;
@@ -67,14 +70,14 @@ struct FilenameEntry {
 	SegmentNumber parentDir = -1;
 };
 
-class FilenameMap : public std::unordered_map<SegmentNumber, FilenameEntry>
+//FilenameMap is a vector bc when we build it, we need all of the names (all of the used segments; large share of all).
+class FilenameMap : public std::vector<FilenameEntry>
 {
-protected:
-	std::vector<wchar_t> filenameBuf;
 public:
 	void process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr);
 	std::string getFullPath(SegmentNumber segmentNo);
 };
+
 
 /*
 Compares two related MFT tables.
@@ -95,13 +98,13 @@ public:
 	Add files (segments) to mark them for skipping or force-copying.
 	On exit, contains entries for some of the files processed, including any explicitly requested by flags below.
 	*/
-	typedef std::unordered_map<SegmentNumber, FileEntry> Filemap;
-	Filemap filemap;
+	MftFilemap filemap;
 
-	//If set, $FILENAME attributes will be processed and added to entries in the filemap
+	//If set, $FILENAME attributes will be processed and file names collected. Only the first filename for every file is recorded.
+	//Warning: slow and memory-non-trivial!
 	FilenameMap* filenames = nullptr;
 
-	//If set, on exit filemap will include all files with dirty segments
+	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;
 
 	/*

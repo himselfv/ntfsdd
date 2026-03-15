@@ -552,7 +552,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	//In List mode, this is going to print *selected* files. In Compare/Rvw, the files with actual *differences* (interspersed with clusters)
 	//Note that this will not print DELETED files. The comparison is one-way.
 	FilenamePrinter filenamePrinter;
-	app.add_option("--print-files", filenamePrinter.outputFile, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
+	app.add_option("--print-files", filenamePrinter.outputFile,
+		"In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.\n"
+		"Warning: speed and memory hit!"
+	)
 		->group("Output options")
 		->expected(0, 0)
 		->default_str("-")
@@ -703,7 +706,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	// - MFT comparison must be on (we don't deal with files in blind $Bitmap modes)
 	// - File name printing must be requested, or we don't bother parsing and recording affected files, for speed
 	//We'll check and warn the user later.
-	MftDiff::Filemap filemap;
+	MftFilemap filemap;
 	FilenameMap filenameMap;
 	bool filemapHasSelectedFiles = false;
 

@@ -76,6 +76,7 @@ inline HRESULT comCheck(HRESULT hr, const char* context) {
 
 
 std::string wcharToUtf8(const std::wstring& input);
+std::string wcharToUtf8(const wchar_t* first, const wchar_t* last);
 std::wstring utf8ToWchar(const std::string& input);
 
 

@@ -39,6 +39,14 @@ std::string wcharToUtf8(const std::wstring& input)
 	return converter.to_bytes(input);
 }
 
+std::string wcharToUtf8(const wchar_t* first, const wchar_t* last)
+{
+	using convert_type = std::codecvt_utf8<wchar_t>;
+	static std::wstring_convert<convert_type, wchar_t> converter;
+	return converter.to_bytes(first, last);
+}
+
+
 std::wstring utf8ToWchar(const std::string& input)
 {
 	using convert_type = std::codecvt_utf8<wchar_t>;

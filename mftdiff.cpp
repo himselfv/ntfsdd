@@ -8,11 +8,7 @@ void FilenameMap::process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr
 	assert(attr.FormCode != NONRESIDENT_FORM);
 	FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
 	if (fndata->Flags & FILE_NAME_NTFS || !entry.filenameNtfs) {
-		if (filenameBuf.size() < fndata->FileNameLength + 2)
-			filenameBuf.resize(fndata->FileNameLength + 2);
-		memcpy(filenameBuf.data(), fndata->FileName, fndata->FileNameLength * 2);
-		filenameBuf[fndata->FileNameLength] = 0x00;
-		entry.filename = wcharToUtf8((wchar_t*)(filenameBuf.data()));
+		entry.filename = wcharToUtf8(fndata->FileName, fndata->FileName+fndata->FileNameLength-1);
 		if (fndata->Flags & FILE_NAME_NTFS) entry.filenameNtfs = true;
 	}
 	if (entry.parentDir == -1 && fndata->ParentDirectory.mergedValue != 0)
@@ -23,19 +19,17 @@ std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
 {
 	std::string result {};
 	while (segmentNo >= 0) {
-		auto it = this->find(segmentNo);
+		auto& entry = (*this)[segmentNo];
 		std::string filename {};
-		if (it == this->end() || it->second.filename.empty())
+		if (entry.filename.empty())
 			filename = std::string{ "#" } +std::to_string(segmentNo);
 		else
-			filename = it->second.filename;
+			filename = entry.filename;
 		result = filename + (!result.empty() ? std::string{ "\\" } +result : std::string{});
-		if (it == this->end())
-			break;
-		if (it->second.parentDir == segmentNo) //Root dir does this
+		if (entry.parentDir == segmentNo) //Root dir does this
 			segmentNo = -1;
 		else
-			segmentNo = it->second.parentDir;
+			segmentNo = entry.parentDir;
 	}
 	return result;
 }
@@ -117,6 +111,9 @@ void MftDiff::scan()
 
 	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
 	SegmentNumber segmentNo = -1;
+
+	if (this->filenames)
+		this->filenames->resize(totalSegments);
 
 	if (this->progressCallback) {
 		this->progressCallback->setMax(totalSegments);
