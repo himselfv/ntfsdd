@@ -86,7 +86,7 @@ void FilePrinter::open()
 		this->m_fileStream.open(outputFile);
 		if (!this->m_fileStream.is_open())
 			throwLastOsError();
-		this->m_fileStream.seekp(std::ofstream::end, 0);
+		this->m_fileStream.seekp(0, std::ofstream::end);
 		out = &this->m_fileStream;
 	}
 }
@@ -94,5 +94,10 @@ void FilePrinter::open()
 void FilePrinter::printOne(const std::string& entry)
 {
 	(*this->out) << entry << std::endl;
+}
+
+void FilenamePrinter::printOne(SegmentNumber segmentNo, const std::string& filename, LCN clusterCount)
+{
+	FilePrinter::printOne(std::to_string(segmentNo) + "\t" + filename + "\t" + std::to_string(clusterCount) + "\t" + dataSizeToStr(clusterCount*BytesPerCluster));
 }
 

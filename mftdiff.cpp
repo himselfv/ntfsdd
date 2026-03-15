@@ -3,25 +3,42 @@
 #include <unordered_map>
 #include "util.h"
 
-
-class FileNameAttributeReader {
-	std::vector<wchar_t> filenameBuf;
-
-public:
-	void updateEntry(ATTRIBUTE_RECORD_HEADER& attr, FileEntry* fileEntry)
-	{
-		assert(attr.FormCode != NONRESIDENT_FORM);
-		FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
-		if (fndata->Flags & FILE_NAME_NTFS || !fileEntry->filenameNtfs) {
-			if (filenameBuf.size() < fndata->FileNameLength + 2)
-				filenameBuf.resize(fndata->FileNameLength + 2);
-			memcpy(filenameBuf.data(), fndata->FileName, fndata->FileNameLength * 2);
-			filenameBuf[fndata->FileNameLength] = 0x00;
-			fileEntry->filename = wcharToUtf8((wchar_t*)(filenameBuf.data()));
-			if (fndata->Flags & FILE_NAME_NTFS) fileEntry->filenameNtfs = true;
-		}
+void FilenameMap::process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr) {
+	auto& entry = (*this)[segmentNo];
+	assert(attr.FormCode != NONRESIDENT_FORM);
+	FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
+	if (fndata->Flags & FILE_NAME_NTFS || !entry.filenameNtfs) {
+		if (filenameBuf.size() < fndata->FileNameLength + 2)
+			filenameBuf.resize(fndata->FileNameLength + 2);
+		memcpy(filenameBuf.data(), fndata->FileName, fndata->FileNameLength * 2);
+		filenameBuf[fndata->FileNameLength] = 0x00;
+		entry.filename = wcharToUtf8((wchar_t*)(filenameBuf.data()));
+		if (fndata->Flags & FILE_NAME_NTFS) entry.filenameNtfs = true;
 	}
-};
+	if (entry.parentDir == -1 && fndata->ParentDirectory.mergedValue != 0)
+		entry.parentDir = fndata->ParentDirectory.segmentNumber();
+}
+
+std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
+{
+	std::string result {};
+	while (segmentNo >= 0) {
+		auto it = this->find(segmentNo);
+		std::string filename {};
+		if (it == this->end() || it->second.filename.empty())
+			filename = std::string{ "#" } +std::to_string(segmentNo);
+		else
+			filename = it->second.filename;
+		result = filename + (!result.empty() ? std::string{ "\\" } +result : std::string{});
+		if (it == this->end())
+			break;
+		if (it->second.parentDir == segmentNo) //Root dir does this
+			segmentNo = -1;
+		else
+			segmentNo = it->second.parentDir;
+	}
+	return result;
+}
 
 
 /*
@@ -62,7 +79,7 @@ void MftDiff::skipSegments(const std::unordered_set<SegmentNumber>& segments)
 
 void MftDiff::verifyMftRunsCompatible()
 {
-	//Убеждаемся, что правый MFT по расположению на диске совпадает с левым или является его началом.
+	//Require that the left-side MFT layout matches the right-side or extends it. MFTs never shrink.
 	auto& srcMap = mftSrc.vcnMap();
 	auto& destMap = mftDest.vcnMap();
 	assert(srcMap.size() >= destMap.size());
@@ -97,7 +114,6 @@ void MftDiff::scan()
 	srcDiff.clear_all();
 
 	FileEntry tempSegmentEntry{};
-	FileNameAttributeReader filenameReader{};
 
 	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
 	SegmentNumber segmentNo = -1;
@@ -129,8 +145,8 @@ void MftDiff::scan()
 
 		bool dirty = false;
 		if (segmentNo > 0) { //For segmentNo==0 we've already read destIter.begin().
-					   //Достаём такой же сегмент из правого MFT
-					   //Это надо сделать в любом случае, даже если левый сектор невалидный, т.к. мы должны идти нога в ногу.
+			//Extract this exact segment from the right-side MFT.
+			//This has to be done even if the left side is invalid as two sides have to march in lockstep.
 			if (destIt != destIter.end())
 				++destIt;
 			if (destIt != destIter.end());
@@ -187,12 +203,13 @@ void MftDiff::scan()
 				}
 
 
-		//Обращаться к filemap нужно по следующим причинам:
-		//1. Это часть мультисегмента (заглавная или дочерняя), тогда надо обработку пропустить, а мультисгемент дополнить.
-		//2. Простой segment dirty, а нас попросили filemapListDirty.
-		//3. Проверить, не задан для для этого сегмента принудительный skip или dirty.
-		//Для третьего пункта обращаться придётся в любом случае.
+		//Reasons to access filemap:
+		//1. This is a part of multisegment (base or extension) => skip the processing and append to multisegment.
+		//2. Plain segment is dirty and we need to filemapListDirty.
+		//3. To check if this segment is pre-configured for skip or dirty.
+		//Third option requires us to check anyways.
 
+		//Find appropriate permanent or temporary segmentEntry for this segment
 		FileEntry* segmentEntry = nullptr;
 		if (baseSegmentNumber >= 0) {
 			segmentEntry = &filemap[baseSegmentNumber];
@@ -218,31 +235,35 @@ void MftDiff::scan()
 			segmentEntry->dirty = true;
 
 
-		//Перебираем атрибуты.
+		//Process the attributes
 		for (auto& attr : AttributeIterator(&(*srcIt))) {
-			if (attr.TypeCode == $FILE_NAME && dirty && filemapNeedNames)
-				filenameReader.updateEntry(attr, segmentEntry);
+			if (attr.TypeCode == $FILE_NAME && filenames!=nullptr)
+				filenames->process(segmentNo, attr);
 			if (attr.FormCode != NONRESIDENT_FORM) continue;
 			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE)) {
-				assert(run.offset >= 0);
+				assert(run.offset >= 0); //We asked the iterator to skip sparse runs
 				//assert(run.offset >= 0 || (attr.Flags & ATTRIBUTE_FLAG_SPARSE)); //Sparse runs are supposed to only appear in sparse attributes!
 				//But no, $BadClus:$Bad has sparse runs even without this flag.
+
 				//Verify that no two files reference the same clusters:
 				assert(srcUsed.bitCount(run.offset, run.offset + run.length - 1) == 0);
+				//Mark clusters as used - always, even when skipping the segment processing later
 				srcUsed.set(run.offset, run.offset + run.length - 1);
+#ifdef MFTDIFF_EXTRA_CHECKS
 				//Verify that we can set bits and count them:
 				assert_eq(srcUsed.bitCount(run.offset, run.offset + run.length - 1), run.length);
-				segmentEntry->totalClusters += run.length;
-				segmentEntry->runList.push_back(run);
-#ifdef MFTDIFF_EXTRA_CHECKS
+				//Count the clusters again
 				totalUsedClusters += run.length;
 				if (dirty && !segmentEntry->multisegment)
 					totalDirtyClusters += run.length;
 #endif
+				//Store all runs in the segment entry, we'll decide later if we mark them
+				segmentEntry->totalClusters += run.length;
+				segmentEntry->runList.push_back(run);
 			}
 		}
 
-		//Простые файлы отмечаем немедленно:
+		//Mark single-segment files immediately
 		if (dirty && !segmentEntry->multisegment)
 			this->onDirtyFile(segmentNo, *segmentEntry);
 	}
@@ -251,7 +272,9 @@ void MftDiff::scan()
 	for (auto& pair : filemap)
 		if (pair.second.dirty && pair.second.multisegment) {
 			this->onDirtyFile(pair.first, pair.second);
+#ifdef MFTDIFF_EXTRA_CHECKS
 			totalDirtyClusters += pair.second.totalClusters;
+#endif
 		}
 
 #ifdef MFTDIFF_EXTRA_CHECKS
@@ -263,7 +286,7 @@ void MftDiff::scan()
 		if (pair.second.dirty) {
 			totalDirtyClustersAgain += pair.second.totalClusters;
 		}
-	qDebug() << "Total dirty clusters: " << totalDirtyClustersAgain << std::endl;
+	qDebug() << "Total dirty clusters mk2: " << totalDirtyClustersAgain << std::endl;
 #endif
 }
 
@@ -273,8 +296,11 @@ void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)
 
 void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
 {
-	if (fi.skip)
+	if (fi.skip) {
+		stats.filesSkipped++;
+		stats.clustersSkipped += fi.totalClusters;
 		return;
+	}
 
 	for (auto& run : fi.runList)
 		srcDiff.set(run);

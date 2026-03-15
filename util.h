@@ -165,6 +165,12 @@ public:
 	void printOne(const std::string& entry);
 };
 
+struct FilenamePrinter : public FilePrinter {
+public:
+	int BytesPerCluster = 1;
+	void printOne(SegmentNumber segmentNo, const std::string& filename, LCN clusterCount);
+};
+
 
 
 struct ClusterRun {

@@ -506,7 +506,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	std::unordered_set<SegmentNumber> skipSegments{};
 	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.")
-		->group("Processing options");
+		->group("Processing options")
+		->delimiter(',');
 
 	LCN asyncBatchLen = 160;
 	app.add_option("--batch-len", asyncBatchLen, "Max batch length, in clusters, for reading.")
@@ -552,7 +553,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	//In List mode, this is going to print *selected* files. In Compare/Rvw, the files with actual *differences* (interspersed with clusters)
 	//Note that this will not print DELETED files. The comparison is one-way.
-	FilePrinter filenamePrinter;
+	FilenamePrinter filenamePrinter;
 	app.add_option("--print-files", filenamePrinter.outputFile, "In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.")
 		->group("Output options")
 		->expected(0, 0)
@@ -640,6 +641,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	src.readLayout();
 	if (srcIsVolume)
 		src.verifyPhysicalVolumeParams();
+	filenamePrinter.BytesPerCluster = src.volumeData().BytesPerCluster;
 
 	bool destIsVolume = verifyMountPoints(destPath, verbose, bNeedsWrites && !bAllowWriteMounted);
 	DWORD dwDestMode = GENERIC_READ;
@@ -704,6 +706,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	// - File name printing must be requested, or we don't bother parsing and recording affected files, for speed
 	//We'll check and warn the user later.
 	MftDiff::Filemap filemap;
+	FilenameMap filenameMap;
 	bool filemapHasSelectedFiles = false;
 
 	if (action == DdAction::VerifyBitmap) {
@@ -732,8 +735,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			filemapHasSelectedFiles = filenamePrinter.active();
 			MftDiff diff(src.mft, dest.mft);
 			diff.skipSegments(skipSegments);
-			diff.filemapNeedNames = filemapHasSelectedFiles;
 			diff.filemapListDirty = filemapHasSelectedFiles;
+			if (filemapHasSelectedFiles)
+				diff.filenames = &filenameMap;
 			if (progress)
 				diff.progressCallback = &progressCallback;
 			diff.scan();
@@ -742,6 +746,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			filemap = std::move(diff.filemap);
 			qInfo() << "Segments: used=" << diff.stats.usedSegments << ", dirty=" << diff.stats.dirtySegments << std::endl;
 			qVerbose() << "Multisegments: " << diff.stats.multiSegments << std::endl;
+			if (diff.stats.filesSkipped != 0 || diff.stats.clustersSkipped != 0)
+				qInfo() << "Skipped: files=" << diff.stats.filesSkipped << ", clusters=" << diff.stats.clustersSkipped
+					<< ", size=" << dataSizeToStr(diff.stats.clustersSkipped*src.volumeData().BytesPerCluster) << std::endl;
 			break;
 		}
 		}
@@ -792,10 +799,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			filenamePrinter.open();
 			for (auto& fi : filemap)
 				if (fi.second.dirty) {
-					std::string filename = fi.second.filename;
-					if (filename.empty())
-						filename = std::string{ "#" }+std::to_string(fi.first);
-					filenamePrinter.printOne(filename + "\t" + std::to_string(fi.second.totalClusters));
+					std::string filename = filenameMap.getFullPath(fi.first);
+					filenamePrinter.printOne(fi.first, filename, fi.second.totalClusters);
 				}
 			qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 		}
@@ -806,7 +811,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		qVerbose() << "Verifying: File map covers the entire cluster selection..." << std::endl;
 		LCN totalClustersInFilemap = 0;
 		for (auto& fi : filemap)
-			if (fi.second.dirty)
+			if (fi.second.dirty && !fi.second.skip)
 				totalClustersInFilemap += fi.second.totalClusters;
 		assert_eq(totalClustersInFilemap, selectedClusterCount);
 		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
@@ -857,20 +862,21 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	//Dirty files after comparison
 	if ((action == DdAction::Compare || action == DdAction::Rcw) && filenamePrinter.active() && filemapHasSelectedFiles) {
+		qVerbose() << "Printing diff files..." << std::endl;
+		auto t1 = GetTickCount();
 		filenamePrinter.open();
 		LCN diffClustersInFilesTotal = 0;
 		for (auto& fi : filemap) {
-			if (!fi.second.dirty) continue;
+			if (!fi.second.dirty || fi.second.skip) continue;
 			size_t bitCount = 0;
 			for (auto& run : fi.second.runList)
 				bitCount += srcDiff.bitCount(run.offset, run.offset + run.length - 1);
 			if (bitCount <= 0) continue;
-			std::string filename = fi.second.filename;
-			if (filename.empty())
-				filename = std::string{ "#" }+std::to_string(fi.first);
-			filenamePrinter.printOne(filename + "\t" + std::to_string(bitCount) + "\t" + dataSizeToStr(bitCount*src.volumeData().BytesPerCluster));
+			std::string filename = filenameMap.getFullPath(fi.first);
+			filenamePrinter.printOne(fi.first, filename, bitCount);
 			diffClustersInFilesTotal += bitCount;
 		}
+		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 
 		//Must match diffClusterCount
 		qInfo() << "Clusters in diff files: " << diffClustersInFilesTotal << std::endl;

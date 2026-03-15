@@ -42,25 +42,38 @@ struct DiffStats {
 	SegmentNumber usedSegments = 0;
 	SegmentNumber dirtySegments = 0;
 	SegmentNumber multiSegments = 0;
+	SegmentNumber filesSkipped = 0;
+	SegmentNumber clustersSkipped = 0;
 };
 
 struct FileEntry {
 	bool dirty = false; //If set, include this file's clusters.
 	bool skip = false; //If set, ignore this file; do not include its clusters.
 	bool multisegment = false; //Multisegment file detected
-	bool filenameNtfs = false;
-	std::string filename{};
 	std::vector<ClusterRun> runList;
 	LCN totalClusters = 0;
 	void reset() {
 		this->dirty = false;
 		this->skip = false;
 		this->multisegment = false;
-		this->filenameNtfs = false;
-		this->filename.clear();
 		this->runList.clear();
 		this->totalClusters = 0;
 	}
+};
+
+struct FilenameEntry {
+	std::string filename;
+	bool filenameNtfs = false;
+	SegmentNumber parentDir = -1;
+};
+
+class FilenameMap : public std::unordered_map<SegmentNumber, FilenameEntry>
+{
+protected:
+	std::vector<wchar_t> filenameBuf;
+public:
+	void process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr);
+	std::string getFullPath(SegmentNumber segmentNo);
 };
 
 /*
@@ -85,11 +98,11 @@ public:
 	typedef std::unordered_map<SegmentNumber, FileEntry> Filemap;
 	Filemap filemap;
 
+	//If set, $FILENAME attributes will be processed and added to entries in the filemap
+	FilenameMap* filenames = nullptr;
+
 	//If set, on exit filemap will include all files with dirty segments
 	bool filemapListDirty = false;
-
-	//If set, $FILENAME attributes will be processed and added to entries in the filemap
-	bool filemapNeedNames = false;
 
 	/*
 	Skip cluster listing/comparison/copying for these particular MFT segments.
