@@ -397,7 +397,6 @@ SegmentIteratorOverlapped::~SegmentIteratorOverlapped()
 	}
 }
 
-//TODO: Nothing here handles zero-length runs.
 void SegmentIteratorOverlapped::advanceRun()
 {
 	if (remainingRuns <= 0) {
@@ -433,9 +432,11 @@ void SegmentIteratorOverlapped::advance()
 		auto len = currentRun->len - currentClusterInRun;
 		if (len > SEGMENTITERATOR_BATCHSIZE)
 			len = SEGMENTITERATOR_BATCHSIZE;
-		if (!this->reader->try_push_back(offset*BytesPerCluster, (uint32_t)(len*BytesPerCluster)))
-			break;
-		currentClusterInRun += len;
+		if (len > 0) { //in case of zero-length runs
+			if (!this->reader->try_push_back(offset*BytesPerCluster, (uint32_t)(len*BytesPerCluster)))
+				break;
+			currentClusterInRun += len;
+		}
 		if (currentClusterInRun >= currentRun->len)
 			this->advanceRun();
 #ifdef SEGMENTITERATOR_TRACKPOS

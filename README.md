@@ -201,6 +201,11 @@ WARNING: Security risk. Data from other files will leak into these. Might not ma
 **Q**: Why don't you at least trim the clusters you're skipping, to prevent data leaks?\
 **A**: See the Trim section. Best to stay away from trim.
 
+**Q**: What files can I skip?\
+**A**: ```hiberfil.sys``` and ```pagefile.sys```. When you boot from the clone, the system may not boot the first time around due to garbage in ``hiberfil.sys``. It should delete it on the second boot. If it fails to do so, help it.
+
+**Q**: Why not skip ``$BadClus``?\
+**A**: Indeed: Copying the map of physical bad clusters elsewhere rarely makes sense. But keeping the old map also makes no sense! We're duplicating the source clusters precisely. What if those clusters are marked bad on the destination? Cluster-by-cluster copy just doesn't mesh with bad cluster maps. Thankfully, these days bad clusters are managed by the hardware and $BadClus in NTFS is unused. So we copy it like any other file.
 
 
 
