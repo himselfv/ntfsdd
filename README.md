@@ -22,6 +22,7 @@ Can be used for:
 In general you have to run this as Administrator. But start without that and see if your goals are satisfied.
 
 
+
 ### The basics
 
 The tool works in two steps:
@@ -109,7 +110,7 @@ You're free to do otherwise of course. ``--unsafe-allow-mounted`` disables this 
 
 
 ## Cloning
-The tool can be used for cloning. "``copy all``" will perform a forensic clone (all clusters) and "``copy bitmap``" will only copy the clusters used (recommended). In both cases, and especially after "``copy all``", defrag /Retrim is advised after clone.
+The tool can be used for cloning. "``copy all``" will perform a forensic clone (all clusters) and "``copy bitmap``" will only copy the clusters used (recommended). In both cases, and especially after "``copy all``", ``defrag /Retrim`` is advised after clone.
 
 When doing a full clone as a safety measure you have to pass ``--overwrite``. No checks against the destination volume layout and MFT will then be made.
 
@@ -120,7 +121,7 @@ You can pass files both as source and as destination. This way you can image vol
 type nul >filename.img
 ```
 
-Note that "copy all" will produce a file equivalent to the source in size. "copy bitmap" might produce a smaller file as final empty unused sectors will not be copied. This may confuse some tools, IDK. You'll also likely will not be able to "copy all" from that file and will have to restore it with "copy bitmap".
+Note that "```copy all```" will produce a file equivalent to the source in size. "```copy bitmap```" might produce a smaller file as final empty unused sectors will not be copied. This may confuse some tools, idk. You'll also likely not be able to "```copy all```" from that file and will have to restore it with "```copy bitmap```". \
 To prevent this, pre-fill the file with zeroes.
 
 #### HOW TO CREATE SMALL NTFS VOLUMES IN FILES W/VARIOUS PARAMS:
@@ -133,18 +134,28 @@ To prevent this, pre-fill the file with zeroes.
 
 
 ## VSS
-It is highly recommended to use Volume Shadow copies as the source instead of the live volume.
+It is recommended to use VSS snapshots as the source instead of the live volume:
+```
+--shadow
+```
+Auto-creates a temporary no-writer-cooperation shadow of the source. To enable writer cooperation (slower, flakier, but better consistency):
+```
+--shadow --shadow-writers
+```
+
+To create/delete a permanent shadow copy manually:
 ```
 wmic shadowcopy call create Volume="C:\"
 vssadmin list shadows
+vssadmin delete shadows [...your shadow ids]
 ```
-See also: vshadow.exe, which allows you to create a temporary in-memory shadow which is auto-deleted after your script finishes.
+
 
 
 ## Trim
 This tool does NOT trim sectors that became free/had been free on full clone. The reasons for this are:
 
-1. Trim is DANGEROUS and FAST. On modern SSDs trimmed data cannot be restored. One wrongly passed param and a second later your entire partition is irreversibly wiped. Do you want us messing with that? No.
+1. Trim is DANGEROUS and FAST. On modern SSDs trimmed data cannot be restored. One wrongly passed param and a second later your entire partition is irreversibly wiped. Do you want us messing with that? No, you don't.
 2. Don't do what's already done well:
 ```
 defrag /Retrim DriveLetter:
@@ -155,10 +166,47 @@ With regular and limited updates I think you can even retrim only occasionally, 
 
 
 
+## Ignoring files
+There's minimal ability to ignore files. Read carefully what it does! It's not meant as a full filename-based filtering. This is just to skip ```hiberfil.sys``` and ```pagefile.sys```.
+
+1. Do ```--print-files-to changelist.txt```
+
+2. Locate the segment numbers of the files you want to ignore (first column)
+
+3. Add ```--skip-segments A,B,C```
+
+
+What this does:
+
+* MFT segments will be copied anyway. MFTs will always match perfectly. The cluster usage on the volumes must always match!
+
+* The data clusters for these segments will not copied.
+
+The file on the destination will become of its current size, referencing its current clusters, but those clusters will contain garbage left from their previous tenants.
+
+
+WARNING: Security risk. Data from other files will leak into these. Might not matter if your destination is accessible only to the admin anyway, but think it through.
+
+* Retrim regularly to lower the chance, but it's never zero.
+
+* Manually ```del``` the file on the destination after cloning if you care.
+
+
+**Q**: Why not accept file names?\
+**A**: This will require two passes over the MFT + always parsing filenames and will slow the process considerably. Also, lots of work.
+
+**Q**: Why not delete ignored files?\
+**A**: This requires editing the destination MFT, $Bitmap, the transaction log and getting involved in the NTFS internals much deeper than required by our simple cloning. Just delete the file with ```del``` later.
+
+**Q**: Why don't you at least trim the clusters you're skipping, to prevent data leaks?\
+**A**: See the Trim section. Best to stay away from trim.
+
+
+
 
 
 ## NTFS version support
-I wrote this for my own uses, so I enabled NTFS versions on which I could have checked this. If you need other NTFS versions supported, send me something. 
+I wrote this for my own uses, so I enabled NTFS versions on which I could have checked this. If you need other NTFS versions supported, send me something.
 
 
 ## Building
