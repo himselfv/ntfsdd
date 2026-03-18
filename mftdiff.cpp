@@ -8,7 +8,7 @@ void FilenameMap::process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr
 	assert(attr.FormCode != NONRESIDENT_FORM);
 	FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
 	if (fndata->Flags & FILE_NAME_NTFS || !entry.filenameNtfs) {
-		entry.filename = wcharToUtf8(fndata->FileName, fndata->FileName+fndata->FileNameLength-1);
+		entry.filename = wcharToUtf8(fndata->FileName, fndata->FileName+fndata->FileNameLength);
 		if (fndata->Flags & FILE_NAME_NTFS) entry.filenameNtfs = true;
 	}
 	if (entry.parentDir == -1 && fndata->ParentDirectory.mergedValue != 0)

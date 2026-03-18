@@ -590,7 +590,7 @@ bool AsyncFileWriter::try_pop_front(uint32_t* bytes_written, uint64_t* offset) {
 	// If it's already done, it returns immediately.
 	BOOL result = GetOverlappedResult(hFile, &slot->ovl, &transferred, TRUE);
 	if (!result)
-		throwLastOsError();
+		throwLastOsError("AsyncFileWriter::write");
 
 	// Release the slot after processing
 	slots[tail]->is_pending = false;

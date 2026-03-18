@@ -106,6 +106,8 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
 			}
 			lcn++;
 			bytesRead -= BytesPerCluster;
+			srcPtr += BytesPerCluster;
+			destPtr += BytesPerCluster;
 			stats.clustersChecked++;
 		}
 		//We do not support "dirty spans" across chunk boundaries so finalize one if we have one

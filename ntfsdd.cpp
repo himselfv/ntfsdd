@@ -835,9 +835,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		clproc.reset(new ClusterDiffWriter(src, dest));
 		progressCallback.setOperationName("Rcw");
 	}
-	clproc->ASYNC_BATCH_LEN = asyncBatchLen;
-	clproc->ASYNC_QUEUE_DEPTH = asyncQueueDepth;
 	if (clproc) {
+		clproc->ASYNC_BATCH_LEN = asyncBatchLen;
+		clproc->ASYNC_QUEUE_DEPTH = asyncQueueDepth;
 		if (progress)
 			clproc->progressCallback = &progressCallback;
 		if (auto cldiff = dynamic_cast<ClusterDiffComparer*>(clproc.get())) {
@@ -903,7 +903,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 int main(int argc, char* argv[]) {
 	try {
-		main2(argc, argv);
+		return main2(argc, argv);
 	}
 	catch (const std::exception& e) {
 		qError() << e.what() << std::endl;
