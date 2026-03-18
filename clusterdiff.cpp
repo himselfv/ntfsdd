@@ -62,6 +62,7 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
 	while (true) {
 		//Part 1. Push read commands into the queue
 		while (sliceIt != slicedRuns.end()) {
+			qDebug() << "ReadQueue: Offset=" << sliceIt->offset*BytesPerCluster << ", size=" << sliceIt->length*BytesPerCluster << std::endl;
 			if (!srcReader->try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
 				break;
 			assert(destReader->try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)));
@@ -87,6 +88,8 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
 		assert(bytesRead == bytesRead2);
 		assert(offset == offset2);
 		
+		qDebug() << "Read: Offset=" << offset << ", size=" << bytesRead << ", data=" << ((void*)srcPtr) << std::endl;
+
 		stats.spansChecked++;
 
 		LCN lcn = offset / BytesPerCluster;
@@ -96,12 +99,14 @@ void ClusterDiffComparer::process(CandidateClusterMap& srcSelection)
 		while (bytesRead > 0) {
 			auto diff = memcmp(srcPtr, destPtr, src.volumeData().BytesPerCluster);
 			if (diff != 0) {
+				qDebug() << "Dirty: LCN=" << lcn << std::endl;
 				stats.clustersDiffCount++;
 				this->onDirty(lcn, srcPtr);
 			}
 			else {
 				if (lastClean != lcn - 1)
 					this->onDirtySpan(lastClean + 1, lcn - lastClean - 1, srcPtr - (lcn - lastClean - 1)*src.volumeData().BytesPerCluster);
+				qDebug() << "Clean: LCN=" << lcn << std::endl;
 				lastClean = lcn;
 			}
 			lcn++;
@@ -153,6 +158,8 @@ void ClusterDiffComparer::onDirty(LCN lcn, void* data)
 
 void ClusterDiffComparer::onDirtySpan(LCN lcnFirst, LCN len, void* data)
 {
+	qDebug() << "Dirty span: LCN=" << lcnFirst << ", len=" << len << std::endl;
+	qDebug() << "Writing: Offset=" << lcnFirst*BytesPerCluster << ", size=" << len*BytesPerCluster << ", data=" << data << std::endl;
 	stats.dirtySpanTotals += len;
 	if (diffMap)
 		diffMap->set(ClusterRun{ lcnFirst, len });
@@ -177,6 +184,7 @@ void ClusterDiffWriter::onDirtySpan(LCN lcnFirst, LCN len, void* data)
 {
 	ClusterDiffComparer::onDirtySpan(lcnFirst, len, data);
 	//Block until we have a free slot and push the write request
+	qDebug() << "Writing: Offset=" << lcnFirst*BytesPerCluster << ", size=" << len*BytesPerCluster << ", ptr=" << data << std::endl;
 	writer->push_back(lcnFirst*BytesPerCluster, (uint32_t)(len*BytesPerCluster), data);
 }
 
@@ -198,6 +206,7 @@ void ClusterCopier::process(CandidateClusterMap& srcSelection)
 	while (true) {
 		//Part 1. Push read commands into the queue
 		while (sliceIt != slicedRuns.end()) {
+			qDebug() << "ReadQueue: Offset=" << sliceIt->offset*BytesPerCluster << ", size=" << sliceIt->length*BytesPerCluster << std::endl;
 			if (!srcReader->try_push_back(sliceIt->offset*BytesPerCluster, (uint32_t)(sliceIt->length*BytesPerCluster)))
 				break;
 			++sliceIt;
@@ -216,6 +225,8 @@ void ClusterCopier::process(CandidateClusterMap& srcSelection)
 		assert(offset % BytesPerCluster == 0);
 		assert(bytesRead % BytesPerCluster == 0);
 
+		qDebug() << "Read: Offset=" << offset << ", size=" << bytesRead << std::endl;
+
 		stats.spansChecked++;
 		stats.clustersChecked += (bytesRead % BytesPerCluster);
 
@@ -223,6 +234,7 @@ void ClusterCopier::process(CandidateClusterMap& srcSelection)
 		LCN lastClean = lcn - 1;
 
 		//Block until we have a free slot and push the write request
+		qDebug() << "Writing: Offset=" << offset << ", size=" << bytesRead << std::endl;
 		writer->push_back(offset, bytesRead, srcPtr);
 
 		srcReader->pop_front();
