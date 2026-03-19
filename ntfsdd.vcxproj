@@ -77,19 +77,23 @@
     <LinkIncremental>true</LinkIncremental>
     <IntDir>$(Platform)\ntfsdd-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <IntDir>$(Platform)\ntfsdd-$(Configuration)\</IntDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
     <IntDir>$(Platform)\ntfsdd-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <IntDir>$(Platform)\ntfsdd-$(Configuration)\</IntDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -159,7 +163,7 @@
     <ClCompile Include="ntfsdd.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="ntfsdd-lib.vcxproj">
+    <ProjectReference Include="core\ntfsdd-lib.vcxproj">
       <Project>{60fddc5a-9bf0-4a5b-9d62-a3e059cb1e9e}</Project>
     </ProjectReference>
   </ItemGroup>

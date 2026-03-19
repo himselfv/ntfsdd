@@ -10,7 +10,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ntfsdd", "ntfsdd.vcxproj", 
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ntfsdd-tests", "tests\ntfsdd-tests.vcxproj", "{4F4F0519-F4BE-4D9D-B82C-9FF744E3BD55}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ntfsdd-lib", "ntfsdd-lib.vcxproj", "{60FDDC5A-9BF0-4A5B-9D62-A3E059CB1E9E}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ntfsdd-lib", "core\ntfsdd-lib.vcxproj", "{60FDDC5A-9BF0-4A5B-9D62-A3E059CB1E9E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
