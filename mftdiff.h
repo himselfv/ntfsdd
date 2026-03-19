@@ -52,12 +52,14 @@ struct FileEntry {
 	bool multisegment = false; //Multisegment file detected
 	std::vector<ClusterRun> runList;
 	LCN totalClusters = 0;
+	bool hasIndexAllocations = false;
 	void reset() {
 		this->dirty = false;
 		this->skip = false;
 		this->multisegment = false;
 		this->runList.clear();
 		this->totalClusters = 0;
+		this->hasIndexAllocations = false;
 	}
 };
 //MftFilemap is a map because we often need just a bunch of entries
@@ -80,19 +82,19 @@ public:
 
 
 /*
-Compares two related MFT tables.
-Builds maps of clusters mentioned by potentially changed file entries.
+Scans one MFT table and builds the list of files.
 */
-class MftDiff {
+class MftScan {
+protected:
+	LCN TotalClusters = 0;
+	int BytesPerFileRecordSegment = 0;
+	LCN totalSegments = 0;
+	virtual void scanInit();
+	void processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry, FILE_RECORD_SEGMENT_HEADER* segment);
+
 public:
 	Mft& mftSrc;
-	Mft& mftDest;
-
-	DiffStats stats;
-
-	//Populated during the scan
 	BitmapBuf srcUsed;
-	CandidateClusterMap srcDiff;
 
 	/*
 	Add files (segments) to mark them for skipping or force-copying.
@@ -104,8 +106,35 @@ public:
 	//Warning: slow and memory-non-trivial!
 	FilenameMap* filenames = nullptr;
 
+	ProgressCallback* progressCallback = nullptr;
+	MftScan(Mft& mftSrc);
+
+	virtual void scan();
+};
+
+/*
+Compares two related MFT tables.
+Builds maps of clusters mentioned by potentially changed file entries.
+*/
+class MftDiff : public MftScan {
+protected:
+	virtual void scanInit() override;
+
+public:
+	Mft& mftDest;
+
+	DiffStats stats;
+
+	//Populated during the scan
+	CandidateClusterMap srcDiff;
+
 	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;
+
+	//Index entries are unreliable: they sometimes update minor DUPLICATE_INFORMATION fields without changing anything in the MFT.
+	//So far I have seen ONLY DUPLICATE_INFORMATION updates like that, but there's no guarantee.
+	//And if we want a perfect mirror, we have to add all directory indices as candidate clusters:
+	bool markAllIndexClustersDirty = false;
 
 	/*
 	Skip cluster listing/comparison/copying for these particular MFT segments.
@@ -119,10 +148,8 @@ public:
 	void skipSegments(const std::unordered_set<SegmentNumber>& segments);
 
 public:
-	ProgressCallback* progressCallback = nullptr;
 	MftDiff(Mft& mftSrc, Mft& mftDest);
 	void verifyMftRunsCompatible();
-	void scan();
-	virtual void onProgress(SegmentNumber idx, SegmentNumber totalSegments);
+	virtual void scan() override;
 	virtual void onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi);
 };

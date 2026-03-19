@@ -572,6 +572,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 
+	bool bMarkAllIndexClustersDirty = false;
+	app.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. Indices may change subtly without this being reflected in the MFT entries. May or may not be neccessary.")
+		->group("Output options")
+		->capture_default_str()
+		;
+
+
 	bool progress = false;
 	app.add_flag("--progress", progress, "Display operations progress.")
 		->group("Output options")
@@ -724,17 +731,34 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			srcSelect.resize(src.volumeData().TotalClusters.QuadPart);
 			srcSelect.set(ClusterRun{ 0, src.volumeData().TotalClusters.QuadPart });
 			break;
-		case DdMode::Bitmap:
+		case DdMode::Bitmap: {
 			srcSelect.resize(src.volumeData().TotalClusters.QuadPart);
 			for (auto& run : BitmapSpans((uint64_t*)srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart))
 				srcSelect.set(run);
+			//If we've been asked to provide file names, god damn it
+			ConsoleProgressCallback progressCallback("Reading MFT");
+			progressCallback.setOnceEvery(1000);
+			filemapHasSelectedFiles = filenamePrinter.active();
+			if (filemapHasSelectedFiles) {
+				MftScan scan(src.mft);
+				scan.filenames = &filenameMap;
+				if (progress)
+					scan.progressCallback = &progressCallback;
+				scan.scan();
+				filemap = std::move(scan.filemap);
+				//The cheapest way to make this map work with MFT-branch-depending code later is to mark everything dirty.
+				for (auto& entry : filemap)
+					entry.second.dirty = true;
+			}
 			break;
+		}
 		case DdMode::MFT: {
 			qVerbose() << "Reading MFT segments..." << std::endl;
 			ConsoleProgressCallback progressCallback("Reading MFT");
 			progressCallback.setOnceEvery(1000);
 			filemapHasSelectedFiles = filenamePrinter.active();
 			MftDiff diff(src.mft, dest.mft);
+			diff.markAllIndexClustersDirty = bMarkAllIndexClustersDirty;
 			diff.skipSegments(skipSegments);
 			diff.filemapListDirty = filemapHasSelectedFiles;
 			if (filemapHasSelectedFiles)

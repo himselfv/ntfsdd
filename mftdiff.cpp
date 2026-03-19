@@ -3,6 +3,9 @@
 #include <unordered_map>
 #include "util.h"
 
+//#define MFTDIFF_EXTRA_CHECKS
+//For when you're looking for the impossible
+
 void FilenameMap::process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr) {
 	auto& entry = (*this)[segmentNo];
 	assert(attr.FormCode != NONRESIDENT_FORM);
@@ -35,6 +38,107 @@ std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
 }
 
 
+MftScan::MftScan(Mft& mftSrc)
+	: mftSrc(mftSrc)
+{
+}
+
+
+void MftScan::scanInit()
+{
+	TotalClusters = mftSrc.vol->volumeData().TotalClusters.QuadPart;
+	BytesPerFileRecordSegment = mftSrc.vol->volumeData().BytesPerFileRecordSegment;
+
+	srcUsed.resize(TotalClusters);
+	srcUsed.clear_all();
+
+	totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
+	if (this->filenames)
+		this->filenames->resize(totalSegments);
+
+	if (this->progressCallback) {
+		this->progressCallback->setMax(totalSegments);
+		this->progressCallback->progress(0, true);
+	}
+}
+
+void MftScan::scan()
+{
+	this->scanInit();
+
+	FileEntry tempSegmentEntry{};
+	SegmentNumber segmentNo = -1;
+
+	auto srcIter = SegmentIter(&mftSrc);
+	auto srcIt = srcIter.begin();
+
+	for (; srcIt != srcIter.end(); ++srcIt) {
+		segmentNo++;
+		if (this->progressCallback)
+			this->progressCallback->progress(segmentNo, false);
+
+		if (!mftSrc.isValidSegment(&*srcIt))
+			continue;
+		if ((srcIt->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
+
+		//0 is a valid segment number but sequenceNumber==0 is reserved so segment:sequence==0:0 safely indicates "not set".
+		SegmentNumber baseSegmentNumber = -1; //We use -1 for the same here
+		if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
+			baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
+
+		if (baseSegmentNumber < 0)
+			for (auto& attr : AttributeIterator(&(*srcIt)))
+				if (attr.TypeCode == $ATTRIBUTE_LIST) {
+					baseSegmentNumber = segmentNo;
+					break;
+				}
+
+
+		//Find appropriate permanent or temporary segmentEntry for this segment
+		FileEntry* segmentEntry = nullptr;
+		if (baseSegmentNumber >= 0) {
+			segmentEntry = &filemap[baseSegmentNumber];
+			assert(segmentEntry->multisegment || segmentEntry->totalClusters == 0); //Either it's new or already multisegment
+			segmentEntry->multisegment = true;
+		}
+		else {
+			segmentEntry = &filemap[segmentNo];
+		}
+
+		//Process the attributes
+		this->processAttributes(segmentNo, segmentEntry, &(*srcIt));
+	}
+}
+
+//Разбирает интересующие нас атрибуты сегмента segment в FileEntry* segmentEntry.
+void MftScan::processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry, FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	for (auto& attr : AttributeIterator(segment)) {
+		if (attr.TypeCode == $FILE_NAME && filenames != nullptr)
+			filenames->process(segmentNo, attr);
+		if (attr.FormCode != NONRESIDENT_FORM) continue;
+		if (attr.TypeCode == $INDEX_ALLOCATION) segmentEntry->hasIndexAllocations = true;
+		for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE)) {
+			assert(run.offset >= 0); //We asked the iterator to skip sparse runs
+			//assert(run.offset >= 0 || (attr.Flags & ATTRIBUTE_FLAG_SPARSE)); //Sparse runs are supposed to only appear in sparse attributes!
+			//But no, $BadClus:$Bad has sparse runs even without this flag.
+
+			//Verify that no two files reference the same clusters:
+			assert(srcUsed.bitCount(run.offset, run.offset + run.length - 1) == 0);
+			//Mark clusters as used - always, even when skipping the segment processing later
+			srcUsed.set(run.offset, run.offset + run.length - 1);
+#ifdef MFTDIFF_EXTRA_CHECKS
+			//Verify that we can set bits and count them:
+			assert_eq(srcUsed.bitCount(run.offset, run.offset + run.length - 1), run.length);
+#endif
+			//Store all runs in the segment entry, we'll decide later if we mark them
+			segmentEntry->totalClusters += run.length;
+			segmentEntry->runList.push_back(run);
+		}
+	}
+}
+
+
 /*
 Получает указатели на два MFT, source и dest. Возвращает две карты кластеров:
 1. Все использованные кластеры по мнению первой MFT (мнение второй - устарело).
@@ -58,11 +162,28 @@ std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
 которые помечены как dirty.
 */
 MftDiff::MftDiff(Mft& mftSrc, Mft& mftDest)
-	: mftSrc(mftSrc), mftDest(mftDest)
+	: MftScan(mftSrc), mftDest(mftDest)
 {
-	//Always mark the MFT itself as dirty. We must always check it and its own entry doesn't always reflect changes.
-	//The callers are free to override us of course.
-	filemap[0].dirty = true;
+	/*
+	Some files can change without any indication in the MFT.
+	I have seen this happen to:
+	  0 MFT
+	  2 LogFile
+	  6 Bitmap (perhaps)
+      32, 33 $TxfLog-related
+	It might be that not all of them are needed, but let's play it safe and add all of them:
+	*/
+	for (int i = 0; i < 33; i++)
+		filemap[i].dirty = true;
+	//If some are not used, nbd
+
+	/*
+	Other such files don't have preallocated numbers. The ones I've observed:
+		System Volume Information\$CBT2
+	The ones I've read about:
+		$Extend\$UsnJrnl
+	At the moment I don't have a system to add these to dirty by their names. Let's wait and see.
+	*/
 }
 
 void MftDiff::skipSegments(const std::unordered_set<SegmentNumber>& segments)
@@ -84,41 +205,28 @@ void MftDiff::verifyMftRunsCompatible()
 	}
 }
 
-//#define MFTDIFF_EXTRA_CHECKS
-//For when you're looking for the impossible
-
-void MftDiff::scan()
+void MftDiff::scanInit()
 {
+	MftScan::scanInit();
+
 	//Убеждаемся, что конфигурация диска одна и та же
-	auto TotalClusters = mftSrc.vol->volumeData().TotalClusters.QuadPart;
 	assert(TotalClusters == mftDest.vol->volumeData().TotalClusters.QuadPart);
-	auto BytesPerFileRecordSegment = mftSrc.vol->volumeData().BytesPerFileRecordSegment;
 	assert(BytesPerFileRecordSegment == mftDest.vol->volumeData().BytesPerFileRecordSegment);
 
 	this->verifyMftRunsCompatible();
 
-#ifdef MFTDIFF_EXTRA_CHECKS
-	LCN totalUsedClusters = 0;
-	LCN totalDirtyClusters = 0;
-#endif
-
-	srcUsed.resize(TotalClusters);
-	srcUsed.clear_all();
 	srcDiff.resize(TotalClusters);
 	srcDiff.clear_all();
+}
+
+
+void MftDiff::scan()
+{
+	this->scanInit();
 
 	FileEntry tempSegmentEntry{};
 
-	auto totalSegments = mftSrc.vol->volumeData().MftValidDataLength.QuadPart / mftSrc.vol->volumeData().BytesPerFileRecordSegment;
 	SegmentNumber segmentNo = -1;
-
-	if (this->filenames)
-		this->filenames->resize(totalSegments);
-
-	if (this->progressCallback) {
-		this->progressCallback->setMax(totalSegments);
-		this->progressCallback->progress(0, true);
-	}
 
 	auto srcIter = SegmentIter(&mftSrc);
 	auto srcIt = srcIter.begin();
@@ -136,7 +244,6 @@ void MftDiff::scan()
 		test = &*srcIt;
 #endif
 		segmentNo++;
-		if (segmentNo % 1000 == 0) this->onProgress(segmentNo, totalSegments);
 		if (this->progressCallback)
 			this->progressCallback->progress(segmentNo, false);
 
@@ -196,7 +303,9 @@ void MftDiff::scan()
 			for (auto& attr : AttributeIterator(&(*srcIt)))
 				if (attr.TypeCode == $ATTRIBUTE_LIST) {
 					baseSegmentNumber = segmentNo;
-					break;
+				}
+				else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty) {
+					dirty = true;
 				}
 
 
@@ -231,53 +340,23 @@ void MftDiff::scan()
 		if (dirty)
 			segmentEntry->dirty = true;
 
-
 		//Process the attributes
-		for (auto& attr : AttributeIterator(&(*srcIt))) {
-			if (attr.TypeCode == $FILE_NAME && filenames!=nullptr)
-				filenames->process(segmentNo, attr);
-			if (attr.FormCode != NONRESIDENT_FORM) continue;
-			for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE)) {
-				assert(run.offset >= 0); //We asked the iterator to skip sparse runs
-				//assert(run.offset >= 0 || (attr.Flags & ATTRIBUTE_FLAG_SPARSE)); //Sparse runs are supposed to only appear in sparse attributes!
-				//But no, $BadClus:$Bad has sparse runs even without this flag.
-
-				//Verify that no two files reference the same clusters:
-				assert(srcUsed.bitCount(run.offset, run.offset + run.length - 1) == 0);
-				//Mark clusters as used - always, even when skipping the segment processing later
-				srcUsed.set(run.offset, run.offset + run.length - 1);
-#ifdef MFTDIFF_EXTRA_CHECKS
-				//Verify that we can set bits and count them:
-				assert_eq(srcUsed.bitCount(run.offset, run.offset + run.length - 1), run.length);
-				//Count the clusters again
-				totalUsedClusters += run.length;
-				if (dirty && !segmentEntry->multisegment)
-					totalDirtyClusters += run.length;
-#endif
-				//Store all runs in the segment entry, we'll decide later if we mark them
-				segmentEntry->totalClusters += run.length;
-				segmentEntry->runList.push_back(run);
-			}
-		}
+		this->processAttributes(segmentNo, segmentEntry, &(*srcIt));
 
 		//Mark single-segment files immediately
 		if (dirty && !segmentEntry->multisegment)
 			this->onDirtyFile(segmentNo, *segmentEntry);
 	}
 
+
+
 	//Теперь проходим filemap и выставляем все кластеры от файлов, у которых хотя бы один сегмент dirty.
 	for (auto& pair : filemap)
 		if (pair.second.dirty && pair.second.multisegment) {
 			this->onDirtyFile(pair.first, pair.second);
-#ifdef MFTDIFF_EXTRA_CHECKS
-			totalDirtyClusters += pair.second.totalClusters;
-#endif
 		}
 
 #ifdef MFTDIFF_EXTRA_CHECKS
-	qDebug() << "Total used clusters: " << totalUsedClusters << std::endl;
-	qDebug() << "Total dirty clusters: " << totalDirtyClusters << std::endl;
-
 	size_t totalDirtyClustersAgain = 0;
 	for (auto& pair : filemap)
 		if (pair.second.dirty) {
@@ -285,10 +364,6 @@ void MftDiff::scan()
 		}
 	qDebug() << "Total dirty clusters mk2: " << totalDirtyClustersAgain << std::endl;
 #endif
-}
-
-void MftDiff::onProgress(SegmentNumber idx, SegmentNumber totalSegments)
-{
 }
 
 void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
