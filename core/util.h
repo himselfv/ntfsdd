@@ -122,6 +122,15 @@ public:
 
 std::string dataSizeToStr(size_t sizeInBytes);
 
+struct DataSizePrinter {
+protected:
+	DWORD BytesPerCluster = 0;
+public:
+	DataSizePrinter(DWORD BytesPerCluster) : BytesPerCluster(BytesPerCluster) {}
+	std::string bytes(size_t count) { return dataSizeToStr(count); }
+	std::string clusters(LCN count) { return std::to_string(count) + " (" + dataSizeToStr(count*BytesPerCluster) + ")"; }
+};
+
 
 class ProgressCallback {
 protected:

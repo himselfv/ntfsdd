@@ -36,14 +36,29 @@ std::ostream& operator<<(std::ostream &os, const DdAction &value) {
 	return (os << enumName(value));
 }
 
-enum class DdMode : int { All, Bitmap, MFT };
+enum class DdMode : int { All, Bitmap, MFT, AntiMFT };
 template<> struct EnumNames<DdMode> {
 	typedef std::vector<EnumItemInfo<DdMode>> Info;
 	static const Info info() {
 		const Info m{
-			{ DdMode::All,	  "all",		"All clusters" },
-			{ DdMode::Bitmap, "bitmap",		"All clusters in use at source according to $Bitmap"  },
-			{ DdMode::MFT,	  "mft",		"All sectors in use at source according to MFT segments that differ from destination"  },
+
+	{ DdMode::All,	  "all",		"All clusters" },
+	{ DdMode::Bitmap, "bitmap",		"All clusters in use at source according to $Bitmap"  },
+	{ DdMode::MFT,	  "mft",		"All sectors in use at source according to MFT segments that differ from destination"  },
+
+	{ DdMode::AntiMFT, "antimft",	"All clusters in use accoding to $Bitmapm, which have NOT changed according to our MFT scan." },
+	/*
+	AntiMFT selects $Bitmap *minus* MFT.
+	== All the clusters that are in use and should not have changed according to the MFT comparison.
+
+	Can be used for coverage checks: to verify that the MFT scan is not missing any changes:
+		ntfsdd compare --select antimft
+
+	All the other MFT scan options work as usual.
+	Remove --skip-segments in antimft mode as skipped clusters WILL pop up in diffs and clutter the results.
+	Keep any --dirty flags you're using as those add to the coverage and not subtract from it.
+	*/
+
 		};
 		return m;
 	}
@@ -51,25 +66,6 @@ template<> struct EnumNames<DdMode> {
 std::ostream& operator<<(std::ostream &os, const DdMode &value) {
 	return (os << enumName(value));
 }
-
-/*
-enum class DdTrim : int { None, Changes, All };
-template<> struct EnumNames<DdTrim> {
-	typedef std::vector<EnumItemInfo<DdMode>> Info;
-	static const Info info() {
-		const Info m{
-			{ DdTrim::None, "none", "" },
-			{ DdTrim::Changes, "changes", "" },
-			{ DdTrim::All, "all", "" },
-		};
-		return m;
-	}
-};
-std::ostream& operator<<(std::ostream &os, const DdTrim &value) {
-	return (os << enumName(value));
-}
-*/
-
 
 
 /*
@@ -527,7 +523,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	bool bReturnExitCode = false;
-	app.add_flag("--exit-code", bReturnExitCode, "Return non-zero exit code if there were differences (compare/rvw) or the selection had been non nil (list/copy). By default exit code is non-zero only on failures.")
+	app.add_flag("--exit-code", bReturnExitCode,
+		"Return non-zero exit code if there were differences (compare/rvw) or the selection had been non nil (list/copy). \
+		By default exit code is non-zero only on failures."
+		)
 		->group("Output options")
 		->capture_default_str()
 		;
@@ -604,6 +603,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	if (srcIsVolume)
 		src.verifyPhysicalVolumeParams();
 	filenamePrinter.BytesPerCluster = src.volumeData().BytesPerCluster;
+	DataSizePrinter srcUnits{src.volumeData().BytesPerCluster};
 
 	bool destIsVolume = verifyMountPoints(destPath, verbose, bNeedsWrites && !bAllowWriteMounted);
 	DWORD dwDestMode = GENERIC_READ;
@@ -649,8 +649,15 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	else
 		dest.mft.loadMinimal();
 
+	// Always load the stored $Bitmap. This is fast, and we need it for a lot of things.
 	qVerbose() << "Loading stored bitmap..." << std::endl;
 	NtfsBitmapFile srcBitmap(&src, &src.mft);
+	{
+		auto srcBitCount = srcBitmap.asBitmap().bitCount();
+		qVerbose() << "$Bitmap: total=" << srcUnits.clusters(srcBitmap.totalClusters())
+			<< 	", used=" << srcUnits.clusters(srcBitCount)
+			<< std::endl;
+	}
 	std::unique_ptr<NtfsBitmapFile> destBitmap{ nullptr };
 	if (!bBlankTarget)
 		destBitmap.reset(new NtfsBitmapFile(&dest, &dest.mft));
@@ -706,7 +713,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			}
 			break;
 		}
-		case DdMode::MFT: {
+
+		case DdMode::AntiMFT:
+		case DdMode::MFT:
+		{
 			qVerbose() << "Reading MFT segments..." << std::endl;
 			ConsoleProgressCallback progressCallback("Reading MFT");
 			progressCallback.setOnceEvery(1000);
@@ -717,6 +727,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			diff.addDirtySegments(dirtySegments);
 			diff.addDirtySubtreeRoots(dirtySubtreeRoots);
 			diff.filemapListDirty = filemapHasSelectedFiles;
+			//AntiMFT requires listing those files that are NOT dirty according to our MFT scan, but MAY be dirty in the inversion.
+			//They shouldn't be, but that's what we're checking against.
+			diff.filemapListAll = filemapHasSelectedFiles && (mode == DdMode::AntiMFT);
 			if (filemapHasSelectedFiles)
 				diff.filenames = &filenameMap;
 			if (progress)
@@ -726,6 +739,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			srcUsed = std::move(diff.srcUsed);
 			filemap = std::move(diff.filemap);
 			diff.stats.print(src.volumeData().BytesPerCluster);
+			//In AntiMFT mode, delay the bit flip until later.
+			//Most safety checks should run on the normal MFT selection.
 			break;
 		}
 		}
@@ -793,6 +808,15 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		assert_eq(totalClustersInFilemap, selectedClusterCount);
 		qVerbose() << "Time: " << (GetTickCount() - t1) << std::endl;
 	}
+
+
+	//AntiMFT; Now that we have verified what we could, flip the MFT bits.
+	if (mode == DdMode::AntiMFT) {
+		srcBitmap.asBitmap().andNot(srcSelect, srcSelect);
+		selectedClusterCount = srcSelect.bitCount();
+		qInfo() << "AntiMFT: Selected cluster count: " << selectedClusterCount << ", size: " << dataSizeToStr(selectedClusterCount*src.volumeData().BytesPerCluster) << std::endl;
+	}
+
 
 
 	LCN diffClusterCount = 0;

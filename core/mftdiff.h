@@ -135,6 +135,9 @@ public:
 	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;
 
+	//If set, filemap will include ALL files. Warning: This may take a lot of memory.
+	bool filemapListAll = false;
+
 	/*
 	Index entries are unreliable: they sometimes update minor DUPLICATE_INFORMATION fields without changing anything in the MFT.
 	So far I have seen ONLY DUPLICATE_INFORMATION updates like that, but there's no guarantee.
@@ -146,6 +149,9 @@ public:
 	Skip cluster listing/comparison/copying for these particular MFT segments.
 	The MFT segments itself will still be copied. The file will be of correct size, pointing at correct (updated) cluster numbers.
 	But the contents will be skipped, so the copy will point to random junk left there.
+
+	The segments skipped this way WILL be tracked normally in the filemap, filenames etc. Their dirty status will be tracked.
+	But their clusters WILL NOT BE MARKED in the difference bitmap. That's the only effect.
 
 	Warning: Very limited application. Mostly for hiberfil.sys.
 		Data leak risk.

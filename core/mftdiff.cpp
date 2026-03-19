@@ -370,7 +370,11 @@ void MftDiff::scan()
 			stats.multiSegments++;
 		} else if (dirty && this->filemapListDirty) {
 			segmentEntry = &filemap[segmentNo];
-		} else {
+		}
+		else if (this->filemapListAll) {
+			segmentEntry = &filemap[segmentNo];
+		}
+		{
 			auto it = filemap.find(segmentNo);
 			if (it == filemap.end()) {
 				segmentEntry = &tempSegmentEntry;
