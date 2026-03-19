@@ -44,6 +44,10 @@ struct DiffStats {
 	SegmentNumber multiSegments = 0;
 	SegmentNumber filesSkipped = 0;
 	SegmentNumber clustersSkipped = 0;
+	SegmentNumber dirtyBecauseOfCmp = 0;
+	SegmentNumber dirtyBecauseOfIndex = 0; //Segments marked dirty because of a "mark all indexes dirty" rule
+	SegmentNumber dirtyBecauseOfParent = 0; //Segments marked dirty because their parent is "mark children dirty".
+	void print(int BytesPerCluster);
 };
 
 struct FileEntry {
@@ -131,9 +135,11 @@ public:
 	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;
 
-	//Index entries are unreliable: they sometimes update minor DUPLICATE_INFORMATION fields without changing anything in the MFT.
-	//So far I have seen ONLY DUPLICATE_INFORMATION updates like that, but there's no guarantee.
-	//And if we want a perfect mirror, we have to add all directory indices as candidate clusters:
+	/*
+	Index entries are unreliable: they sometimes update minor DUPLICATE_INFORMATION fields without changing anything in the MFT.
+	So far I have seen ONLY DUPLICATE_INFORMATION updates like that, but there's no guarantee.
+	And if we want a perfect mirror, we have to add all directory indices as candidate clusters:
+	*/
 	bool markAllIndexClustersDirty = false;
 
 	/*
@@ -146,6 +152,30 @@ public:
 	Determine the segment numbers for your file with "fsutil file layout" or by listing changed files w/this tool.
 	*/
 	void skipSegments(const std::unordered_set<SegmentNumber>& segments);
+
+	/*
+	These segments will always be marked as dirty (their data clusters will always get rcw/copied).
+	Some system files may get updated without the MFT entry changing at all.
+	System files 0-35 are automatically added to this.
+	*/
+	void addDirtySegments(const std::unordered_set<SegmentNumber>& segments);
+
+	/*
+	All MFT entries ONE LEVEL below these will be marked dirty (their data clusters will always get rcw/copied).
+	
+	In folders like $Extend a lot of files are updated by the system in a way that their MFT entries do not change.
+	For files with predefined segmentNumbers (MFT 0-35) we can hardcode forced-dirty status (see addDirtySegments),
+	but some of those file IDs are arbitrary.
+	Instead of trying to track this by name we skip "everything inside $Extend".
+
+	Entries 0-35 are added automatically. For System Volume Information, determine its dynamic ID and pass here.
+
+	Note: This works ONE LEVEL down. More levels would require pre-scanning the MFT to build the folder tree
+	which is slow.
+	*/
+	std::unordered_set<SegmentNumber> dirtySubtreeRoots {};
+	void addDirtySubtreeRoots(const std::unordered_set<SegmentNumber>& segments);
+
 
 public:
 	MftDiff(Mft& mftSrc, Mft& mftDest);

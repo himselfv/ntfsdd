@@ -41,5 +41,5 @@ std::string readChars(wchar_t* first, size_t len)
 AttrFilename::AttrFilename(ATTRIBUTE_RECORD_HEADER* attr)
 {
 	assert(attr->FormCode != NONRESIDENT_FORM);
-	fn = (FILE_NAME*)((char*)&attr + attr->Form.Resident.ValueOffset);
+	fn = (FILE_NAME*)((char*)attr + attr->Form.Resident.ValueOffset);
 }

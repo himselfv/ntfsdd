@@ -38,6 +38,17 @@ std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
 }
 
 
+void DiffStats::print(int BytesPerCluster)
+{
+	qInfo() << "Segments: used=" << usedSegments << ", dirty=" << dirtySegments << std::endl;
+	qVerbose() << "Multisegments: " << multiSegments << std::endl;
+	if (filesSkipped != 0 || clustersSkipped != 0)
+		qInfo() << "Skipped: files=" << filesSkipped << ", clusters=" << clustersSkipped
+		<< ", size=" << dataSizeToStr(clustersSkipped*BytesPerCluster) << std::endl;
+	qVerbose() << "Dirty bc: diff=" << dirtyBecauseOfCmp << ", index=" << dirtyBecauseOfIndex << ", parent=" << dirtyBecauseOfParent << std::endl;
+}
+
+
 MftScan::MftScan(Mft& mftSrc)
 	: mftSrc(mftSrc)
 {
@@ -182,8 +193,13 @@ MftDiff::MftDiff(Mft& mftSrc, Mft& mftDest)
 		System Volume Information\$CBT2
 	The ones I've read about:
 		$Extend\$UsnJrnl
-	At the moment I don't have a system to add these to dirty by their names. Let's wait and see.
+
+	At the moment I have only a partial system to handle this:
+	We will add segmentNumbers of some dirs and all files under these dirs will be marked dirty.
+	This covers $Extend, but not System Volume Information (which is dynamic).
 	*/
+	for (int i = 0; i < 33; i++)
+		this->dirtySubtreeRoots.insert(i);
 }
 
 void MftDiff::skipSegments(const std::unordered_set<SegmentNumber>& segments)
@@ -191,6 +207,18 @@ void MftDiff::skipSegments(const std::unordered_set<SegmentNumber>& segments)
 	for (auto& segNo : segments)
 		this->filemap[segNo].skip = true;
 }
+
+void MftDiff::addDirtySegments(const std::unordered_set<SegmentNumber>& segments)
+{
+	for (auto& segNo : segments)
+		this->filemap[segNo].dirty = true;
+}
+
+void MftDiff::addDirtySubtreeRoots(const std::unordered_set<SegmentNumber>& segments)
+{
+	this->dirtySubtreeRoots.insert(segments.begin(), segments.end());
+}
+
 
 void MftDiff::verifyMftRunsCompatible()
 {
@@ -281,9 +309,9 @@ void MftDiff::scan()
 			*((USHORT*)((char*)srcIt.segment + srcIt.segment->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
 			*((USHORT*)((char*)destIt.segment + destIt.segment->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
 			dirty = (0 != memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
+			if (dirty)
+				stats.dirtyBecauseOfCmp++;
 		}
-		if (dirty)
-			stats.dirtySegments++;
 
 
 		//Дальше выясняем, является ли этот сегмент особым.
@@ -299,14 +327,32 @@ void MftDiff::scan()
 		//Можно было бы попытаться что-то сделать за одну итерацию атрибутов, но тогда пришлось бы сохранять отдельно все увиденные runs,
 		//т.к. в любой момент может выйти, что их всё-таки надо было в *какой-то* записи регистрировать.
 		//Пробежать лишний раз по атрибутам дешевле этих операций с памятью.
+		//Кроме того, нам нужно предварительно собрать и ещё кое-какую информацию.
 		if (baseSegmentNumber < 0)
 			for (auto& attr : AttributeIterator(&(*srcIt)))
 				if (attr.TypeCode == $ATTRIBUTE_LIST) {
 					baseSegmentNumber = segmentNo;
 				}
-				else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty) {
+				else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty && !dirty) {
 					dirty = true;
+					stats.dirtyBecauseOfIndex++;
 				}
+				else if (attr.TypeCode == $FILE_NAME && !dirty) {
+					//Any time a file is included in a dir, it gets another $FILE_NAME with backreference to that dir
+					//Any backreference to a dirtySegmentRoot means the segment should be marked dirty.
+					AttrFilename attrFn{ &attr };
+					if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0
+						&& dirtySubtreeRoots.find(attrFn.fn->ParentDirectory.segmentNumber()) != dirtySubtreeRoots.end())
+					{
+						dirty = true;
+						stats.dirtyBecauseOfParent++;
+					}
+				}
+
+
+		//By this point we should have determined whether this local segment is dirty
+		if (dirty)
+			stats.dirtySegments++;
 
 
 		//Reasons to access filemap:
@@ -337,6 +383,7 @@ void MftDiff::scan()
 			}
 		}
 
+		//Mark the dirtiness down in the temporary, permanent standalone or permanent multisegment entry.
 		if (dirty)
 			segmentEntry->dirty = true;
 

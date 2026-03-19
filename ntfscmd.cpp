@@ -51,6 +51,14 @@ void dumpHex(void* data, size_t sz, int lineSize)
 	}
 }
 
+std::string segmentRefToStr(MFT_SEGMENT_REFERENCE& ref)
+{
+	if (ref.mergedValue == 0)
+		return "none";
+	else
+		return std::to_string(ref.segmentNumber()) + " rev" + std::to_string(ref.classic.SequenceNumber);
+}
+
 std::string attrTypeToStr(ATTRIBUTE_TYPE_CODE type)
 {
 	switch (type) {
@@ -73,17 +81,31 @@ std::string attrTypeToStr(ATTRIBUTE_TYPE_CODE type)
 	}
 }
 
+void printFilenameAttr(ATTRIBUTE_RECORD_HEADER& attr)
+{
+	AttrFilename fn{ &attr };
+	std::cout << "  FILE_NAME: " << AttrFilename(&attr).name() << std::endl;
+	std::cout << "  Parent dir: " << segmentRefToStr(fn.fn->ParentDirectory) << std::endl;
+	std::cout << "  Flags: " << (USHORT)(fn.fn->Flags);
+	if (fn.fn->Flags & FILE_NAME_NTFS) std::cout << " NTFS";
+	if (fn.fn->Flags & FILE_NAME_DOS) std::cout << " DOS";
+	std::cout << std::endl;
+}
+
 void printAttr(ATTRIBUTE_RECORD_HEADER& attr)
 {
 	std::cout << attrTypeToStr(attr.TypeCode) << " len=" << attr.RecordLength << " flags=" << attr.Flags;
-	if (attr.Flags && ATTRIBUTE_FLAG_COMPRESSION_MASK) std::cout << " COMPRESSION_MASK";
-	if (attr.Flags && ATTRIBUTE_FLAG_SPARSE) std::cout << " SPARSE";
-	if (attr.Flags && ATTRIBUTE_FLAG_ENCRYPTED) std::cout << " ENCRYPTED";
+	if (attr.Flags & ATTRIBUTE_FLAG_COMPRESSION_MASK) std::cout << " COMPRESSION_MASK";
+	if (attr.Flags & ATTRIBUTE_FLAG_SPARSE) std::cout << " SPARSE";
+	if (attr.Flags & ATTRIBUTE_FLAG_ENCRYPTED) std::cout << " ENCRYPTED";
 	std::cout << std::endl;
 	std::cout << "  Instance: " << attr.Instance << std::endl;
 	std::cout << "  Name: " << attrNameStr(&attr) << std::endl;
 	if (attr.FormCode == RESIDENT_FORM) {
-		std::cout << "  Resident: Data=" << attr.Form.Resident.ValueOffset << "+" << attr.Form.Resident.ValueLength << ", Flags=" << attr.Form.Resident.ResidentFlags << std::endl;
+		std::cout << "  Resident: Data=" << attr.Form.Resident.ValueOffset << "+" << attr.Form.Resident.ValueLength << ", Flags=" << ((USHORT)attr.Form.Resident.ResidentFlags) << std::endl;
+		//Dump extended info on some attributes
+		if (attr.TypeCode == $FILE_NAME)
+			printFilenameAttr(attr);
 	}
 	else if (attr.FormCode == NONRESIDENT_FORM) {
 		std::cout << "  Non-resident: VCN=" << attr.Form.Nonresident.LowestVcn << "-" << attr.Form.Nonresident.HighestVcn << std::endl;
@@ -103,17 +125,14 @@ void printSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 {
 
 	std::cout << segment->MultiSectorHeader.Signature;
-	if (segment->BaseFileRecordSegment.mergedValue == 0)
-		std::cout << " BaseSegment: none.";
-	else
-		std::cout << " BaseSegment: " << segment->BaseFileRecordSegment.segmentNumber() << ", seq=" << segment->BaseFileRecordSegment.classic.SequenceNumber;
-	std::cout << " LSN: " << segment->Lsn << std::endl;
+	std::cout << ", BaseSegment: " << segmentRefToStr(segment->BaseFileRecordSegment);
+	std::cout << ", LSN: " << segment->Lsn << std::endl;
 
 	std::cout << "SequenceNumber: " << segment->SequenceNumber << " ReferenceCount: " << segment->ReferenceCount << std::endl;
 
 	std::cout << "Flags: " << std::to_string(segment->Flags);
-	if (segment->Flags && FILE_RECORD_SEGMENT_IN_USE) std::cout << " IN_USE";
-	if (segment->Flags && FILE_FILE_NAME_INDEX_PRESENT) std::cout << " FILE_NAME_INDEX_PRESENT";
+	if (segment->Flags & FILE_RECORD_SEGMENT_IN_USE) std::cout << " IN_USE";
+	if (segment->Flags & FILE_FILE_NAME_INDEX_PRESENT) std::cout << " FILE_NAME_INDEX_PRESENT";
 	std::cout << std::endl;
 
 	std::cout << "Update sequence: offset=" << segment->MultiSectorHeader.UpdateSequenceArrayOffset

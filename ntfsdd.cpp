@@ -450,6 +450,24 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		->group("Processing options")
 		->delimiter(',');
 
+	std::unordered_set<SegmentNumber> dirtySegments{};
+	app.add_option("--dirty-segments", dirtySegments, "Always consider these MFT entries dirty (rcw/copy their data). Only works for MFT modes.")
+		->group("Processing options")
+		->delimiter(',');
+
+	std::unordered_set<SegmentNumber> dirtySubtreeRoots{};
+	app.add_option("--dirty-subtree,--dirty-subdir", dirtySubtreeRoots, "Always consider files IN these MFT entries dirty (rcw/copy their data). One level deep. See the docs.")
+		->group("Processing options")
+		->delimiter(',');
+
+	bool bMarkAllIndexClustersDirty = false;
+	app.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. Indexes may change subtly without this being reflected in the MFT entries. May or may not be neccessary.")
+		->group("Processing options")
+		->capture_default_str()
+		;
+
+
+
 	LCN asyncBatchLen = 160;
 	app.add_option("--batch-len", asyncBatchLen, "Max batch length, in clusters, for reading.")
 		->group("Processing options")
@@ -510,13 +528,6 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	bool bReturnExitCode = false;
 	app.add_flag("--exit-code", bReturnExitCode, "Return non-zero exit code if there were differences (compare/rvw) or the selection had been non nil (list/copy). By default exit code is non-zero only on failures.")
-		->group("Output options")
-		->capture_default_str()
-		;
-
-
-	bool bMarkAllIndexClustersDirty = false;
-	app.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. Indices may change subtly without this being reflected in the MFT entries. May or may not be neccessary.")
 		->group("Output options")
 		->capture_default_str()
 		;
@@ -703,6 +714,8 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			MftDiff diff(src.mft, dest.mft);
 			diff.markAllIndexClustersDirty = bMarkAllIndexClustersDirty;
 			diff.skipSegments(skipSegments);
+			diff.addDirtySegments(dirtySegments);
+			diff.addDirtySubtreeRoots(dirtySubtreeRoots);
 			diff.filemapListDirty = filemapHasSelectedFiles;
 			if (filemapHasSelectedFiles)
 				diff.filenames = &filenameMap;
@@ -712,11 +725,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			srcSelect = std::move(diff.srcDiff);
 			srcUsed = std::move(diff.srcUsed);
 			filemap = std::move(diff.filemap);
-			qInfo() << "Segments: used=" << diff.stats.usedSegments << ", dirty=" << diff.stats.dirtySegments << std::endl;
-			qVerbose() << "Multisegments: " << diff.stats.multiSegments << std::endl;
-			if (diff.stats.filesSkipped != 0 || diff.stats.clustersSkipped != 0)
-				qInfo() << "Skipped: files=" << diff.stats.filesSkipped << ", clusters=" << diff.stats.clustersSkipped
-					<< ", size=" << dataSizeToStr(diff.stats.clustersSkipped*src.volumeData().BytesPerCluster) << std::endl;
+			diff.stats.print(src.volumeData().BytesPerCluster);
 			break;
 		}
 		}
