@@ -8,7 +8,10 @@
 #include <memory>
 #include "ntfs.h"
 
-//This might have better gone to osutil.h
+/*
+OS and COM error handling.
+These might have better gone to osutil.h
+*/
 class OsError : public std::runtime_error {
 protected:
 	DWORD m_errorCode = 0;
@@ -57,6 +60,9 @@ inline HRESULT comCheck(HRESULT hr, const char* context) {
 #define HRCHECK(...) comCheck(__VA_ARGS__, #__VA_ARGS__)
 
 
+/*
+Assertions.
+*/
 class AssertionFailure : public std::runtime_error {
 public:
 	using runtime_error::runtime_error;
@@ -105,14 +111,19 @@ inline AssertionFailure format_assert(const std::string& text, Args&&... args) {
 	} while (0)
 
 
+
+/*
+Encoding conversions
+*/
 std::string wcharToUtf8(const std::wstring& input);
 std::string wcharToUtf8(const wchar_t* first, const wchar_t* last);
 std::wstring utf8ToWchar(const std::string& input);
 
 
 
-//#define LOG(...) print_all(__VA_ARGS__)
-
+/*
+Logging
+*/
 enum Verbosity {
 	Error = 0,
 	Warning,
@@ -120,7 +131,6 @@ enum Verbosity {
 	Verbose,
 	Debug
 };
-
 
 class NullBuffer : public std::streambuf {
 public:
@@ -166,6 +176,9 @@ public:
 
 
 
+/*
+Operation time measurements
+*/
 struct PerformanceFrequency {
 public:
 	LARGE_INTEGER value;
@@ -227,6 +240,9 @@ public:
 
 
 
+/*
+Progress callbacks for various operations.
+*/
 class ProgressCallback {
 protected:
 	uint64_t m_max = 0;
@@ -258,6 +274,9 @@ typedef SimpleConsoleProgressCallback ConsoleProgressCallback;
 
 
 
+/*
+Filename printing.
+*/
 struct FilePrinter {
 protected:
 	std::ofstream m_fileStream {};
@@ -278,6 +297,9 @@ public:
 
 
 
+/*
+Cluster iteration and slicing.
+*/
 struct ClusterRun {
 	LCN offset = 0;
 	LCN length = 0;
@@ -285,7 +307,6 @@ struct ClusterRun {
 	ClusterRun(LCN offset, LCN length) : offset(offset), length(length) {}
 	bool operator==(const ClusterRun& other) const { return (offset == other.offset) && (length == other.length); }
 };
-
 
 /*
 Iterates over cluster runs in continuous blocks of no more than max_block_size clusters.

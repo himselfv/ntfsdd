@@ -373,19 +373,18 @@ void MftDiff::scan()
 		}
 		else if (this->filemapListAll) {
 			segmentEntry = &filemap[segmentNo];
-		}
-		{
+		} else {
 			auto it = filemap.find(segmentNo);
 			if (it == filemap.end()) {
 				segmentEntry = &tempSegmentEntry;
 				segmentEntry->reset();
-			} else {
+			} else
 				segmentEntry = &it->second;
-				//If this entry has been marked dirty ahead of time, respect that and mark its clusters dirty.
-				if (segmentEntry->dirty)
-					dirty = true;
-			}
 		}
+
+		//If this entry has been marked dirty ahead of time, respect that and mark its clusters dirty.
+		if (segmentEntry->dirty)
+			dirty = true;
 
 		//Mark the dirtiness down in the temporary, permanent standalone or permanent multisegment entry.
 		if (dirty)

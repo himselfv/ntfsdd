@@ -814,7 +814,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 					totalClustersInFilemap += fi.second.totalClusters;
 			assert_eq(totalClustersInFilemap, selectedClusterCount,
 				"The operation you have requested required constructing a map of files to which the selected clusters belong. ",
-				"For some reason the clusters covered by those 'dirty' files does not match the total number " \
+				"For some reason the clusters covered by these 'dirty' files do not match the total number " \
 				"of 'dirty' clusters that went into its construction."
 			);
 		}
