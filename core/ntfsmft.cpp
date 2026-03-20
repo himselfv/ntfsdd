@@ -397,6 +397,24 @@ SegmentIteratorOverlapped::~SegmentIteratorOverlapped()
 	}
 }
 
+SegmentIteratorOverlapped::SegmentIteratorOverlapped(SegmentIteratorOverlapped&& other)
+	: SegmentIteratorBase(nullptr, 0)
+{
+	(*this) = std::move(other);
+}
+
+SegmentIteratorOverlapped& SegmentIteratorOverlapped::operator=(SegmentIteratorOverlapped&& other)
+{
+	static_cast<SegmentIteratorBase&>(*this) = std::move(static_cast<SegmentIteratorBase&&>(other));
+	
+	this->reader = other.reader;
+	other.reader = nullptr;
+
+	this->remainingBufferData = other.remainingBufferData;
+	this->currentClusterInRun = other.currentClusterInRun;
+	return *this;
+}
+
 void SegmentIteratorOverlapped::advanceRun()
 {
 	if (remainingRuns <= 0) {

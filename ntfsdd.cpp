@@ -676,13 +676,18 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	BitmapBuf srcUsed;
 	CandidateClusterMap srcSelect;
 
-	//Everything related to printing affected files only works in certain modes:
-	// - MFT comparison must be on (we don't deal with files in blind $Bitmap modes)
-	// - File name printing must be requested, or we don't bother parsing and recording affected files, for speed
-	//We'll check and warn the user later.
+
+	/*
+	Printing affected files:
+	1. Must be requested, or we don't bother parsing and recording affected files, for speed
+	2. Only works well in ::MFT mode. In others:
+	  - we have to parse the MFT IN ADDITION to requested selection op (::All or ::Bitmap)
+	  - ALL files will have to be tracked (slow and memory heavy).
+	*/
 	MftFilemap filemap;
-	FilenameMap filenameMap;
-	bool filemapHasSelectedFiles = false;
+	FilenameMap filenameMap; //empty() if not requested/not supported.
+	std::unique_ptr<MftScan> mftScanner {};
+
 
 	if (action == DdAction::VerifyBitmap) {
 		ScopedOp op("Recalculating $Bitmap");
@@ -699,59 +704,70 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			srcSelect.resize(src.volumeData().TotalClusters.QuadPart);
 			for (auto& run : BitmapSpans((uint64_t*)srcBitmap.buf->Buffer, srcBitmap.buf->BitmapSize.QuadPart))
 				srcSelect.set(run);
-			//If we've been asked to provide file names, god damn it
-			ConsoleProgressCallback progressCallback("Reading MFT");
-			progressCallback.setOnceEvery(1000);
-			filemapHasSelectedFiles = filenamePrinter.active();
-			if (filemapHasSelectedFiles) {
-				MftScan scan(src.mft);
-				scan.filenames = &filenameMap;
-				if (progress)
-					scan.progressCallback = &progressCallback;
-				scan.scan();
-				filemap = std::move(scan.filemap);
-				//The cheapest way to make this map work with MFT-branch-depending code later is to mark everything dirty.
-				for (auto& entry : filemap)
-					entry.second.dirty = true;
-			}
 			break;
 		}
-
+		//These two just prepare the scanner, the scan is gonna happen below
 		case DdMode::AntiMFT:
 		case DdMode::MFT:
 		{
-			qVerbose() << "Reading MFT segments..." << std::endl;
-			ConsoleProgressCallback progressCallback("Reading MFT");
-			progressCallback.setOnceEvery(1000);
-			filemapHasSelectedFiles = filenamePrinter.active();
-			MftDiff diff(src.mft, dest.mft);
+			mftScanner.reset(new MftDiff(src.mft, dest.mft));
+			auto& diff = *static_cast<MftDiff*>(mftScanner.get());
 			diff.markAllIndexClustersDirty = bMarkAllIndexClustersDirty;
 			diff.skipSegments(skipSegments);
 			diff.addDirtySegments(dirtySegments);
 			diff.addDirtySubtreeRoots(dirtySubtreeRoots);
-			diff.filemapListDirty = filemapHasSelectedFiles;
+			diff.filemapListDirty = filenamePrinter.active();
 			//AntiMFT requires listing those files that are NOT dirty according to our MFT scan, but MAY be dirty in the inversion.
 			//They shouldn't be, but that's what we're checking against.
-			diff.filemapListAll = filemapHasSelectedFiles && (mode == DdMode::AntiMFT);
-			if (filemapHasSelectedFiles)
-				diff.filenames = &filenameMap;
-			if (progress)
-				diff.progressCallback = &progressCallback;
-			diff.scan();
-			srcSelect = std::move(diff.srcDiff);
-			srcUsed = std::move(diff.srcUsed);
-			filemap = std::move(diff.filemap);
-			diff.stats.print(src.volumeData().BytesPerCluster);
-			//In AntiMFT mode, delay the bit flip until later.
-			//Most safety checks should run on the normal MFT selection.
+			diff.filemapListAll = filenamePrinter.active() && (mode == DdMode::AntiMFT);
 			break;
 		}
 		}
+
+		/*
+		If we've been asked to provide file names and we're not in the MFT mode, we still have to read MFT.
+		 1. Need file coverage for all selected clusters, which for Mode::Bitmap and Mode::All means ALL files. Memory-heavy!
+		 2. Later we check that dirty file-based cluster coverage == selected files.
+			This check might work with Mode::Bitmap, idk (we ARE selecting all files), but it will fail with Mode::All.
+			No file uses those clusters.
+			We'll have to disable it.
+		*/
+		if (filenamePrinter.active() && !mftScanner) {
+			MftScan scan(src.mft);
+			scan.scan();
+			filemap = std::move(scan.filemap);
+			//The cheapest way to make this map work with MFT-branch-depending code later is to mark everything dirty.
+			for (auto& entry : filemap)
+				entry.second.dirty = true;
+		}
+
+		//If we have the MFT scanner for any reason, scan. Extract what we can.
+		if (mftScanner) {
+			qVerbose() << "Reading MFT segments..." << std::endl;
+			ConsoleProgressCallback progressCallback("Reading MFT");
+			progressCallback.setOnceEvery(1000);
+			if (filenamePrinter.active())
+				mftScanner->filenames = &filenameMap;
+			if (progress)
+				mftScanner->progressCallback = &progressCallback;
+			mftScanner->scan();
+			srcUsed = std::move(mftScanner->srcUsed);
+			filemap = std::move(mftScanner->filemap);
+			mftScanner->scanStats.print(src.volumeData().BytesPerCluster);
+		}
+		if (auto mftDiff = dynamic_cast<MftDiff*>(mftScanner.get())) {
+			srcSelect = std::move(mftDiff->srcDiff);
+			mftDiff->diffStats.print(src.volumeData().BytesPerCluster);
+
+			//In AntiMFT mode, delay the bit flip until later.
+			//Most safety checks should run on the normal MFT selection.
+		}
 	}
 
-	//Not all selection modes support filename collection, warn the user on conflicting options here instead of later at every point
-	if (filenamePrinter.active() && !filemapHasSelectedFiles)
+	//Filename collection requested but unsupported, warn the user on conflicting options here
+	if (filenamePrinter.active() && filenameMap.empty())
 		qWarning() << "Cannot print file names in this mode, ignoring" << std::endl;
+
 
 
 	//Verify our manual cluster usage map matches $Bitmap, if we have it from VerifyBitmap or any task with select==MFT.
@@ -790,9 +806,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 	//If we have requested listing files
-	if (filemapHasSelectedFiles) {
-		//In other modes we print files with clusters that actually differ
-		if ((action == DdAction::List || action == DdAction::Copy) && filenamePrinter.active()) {
+	if (filenamePrinter.active() && !filenameMap.empty()) {
+		//These modes print selections, other do actual differences
+		if (action == DdAction::List || action == DdAction::Copy) {
 			qVerbose() << "Printing selected files..." << std::endl;
 			MeasureTime tm;
 			filenamePrinter.open();
@@ -830,6 +846,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 
+	//Cluster comparison start!
 	LCN diffClusterCount = 0;
 	BitmapBuf srcDiff {};
 
@@ -872,7 +889,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		clusterPrinter.print(srcDiff);
 
 	//Dirty files after comparison
-	if ((action == DdAction::Compare || action == DdAction::Rcw) && filenamePrinter.active() && filemapHasSelectedFiles) {
+	if ((action == DdAction::Compare || action == DdAction::Rcw) && filenamePrinter.active() && !filenameMap.empty()) {
 		qVerbose() << "Printing diff files..." << std::endl;
 		MeasureTime tm;
 		filenamePrinter.open();

@@ -38,22 +38,30 @@ std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
 }
 
 
+void ScanStats::print(int BytesPerCluster)
+{
+	qInfo() << "Segments: used=" << usedSegments;
+	qVerbose() << ", multisegments=" << multiSegments;
+	qInfo() << std::endl;
+}
+
 void DiffStats::print(int BytesPerCluster)
 {
-	qInfo() << "Segments: used=" << usedSegments << ", dirty=" << dirtySegments << std::endl;
-	qVerbose() << "Multisegments: " << multiSegments << std::endl;
+	qInfo() << "Segments: dirty=" << dirtySegments;
+	qVerbose() << " bc: diff=" << dirtyBecauseOfCmp << ", index=" << dirtyBecauseOfIndex << ", parent=" << dirtyBecauseOfParent;
+	qInfo() << std::endl;
 	if (filesSkipped != 0 || clustersSkipped != 0)
 		qInfo() << "Skipped: files=" << filesSkipped << ", clusters=" << clustersSkipped
 		<< ", size=" << dataSizeToStr(clustersSkipped*BytesPerCluster) << std::endl;
-	qVerbose() << "Dirty bc: diff=" << dirtyBecauseOfCmp << ", index=" << dirtyBecauseOfIndex << ", parent=" << dirtyBecauseOfParent << std::endl;
 }
+
+
 
 
 MftScan::MftScan(Mft& mftSrc)
 	: mftSrc(mftSrc)
 {
 }
-
 
 void MftScan::scanInit()
 {
@@ -73,53 +81,128 @@ void MftScan::scanInit()
 	}
 }
 
+
+/*
+Scan core.
+Keep the current state in the member fields so that component functions can access it.
+*/
 void MftScan::scan()
 {
 	this->scanInit();
 
-	FileEntry tempSegmentEntry{};
-	SegmentNumber segmentNo = -1;
+	auto& segmentNo = this->segmentNo;
+	segmentNo = -1;
 
 	auto srcIter = SegmentIter(&mftSrc);
-	auto srcIt = srcIter.begin();
+	this->srcIt = std::move(srcIter.begin());
+	auto srcEnd = std::move(srcIter.end());
 
-	for (; srcIt != srcIter.end(); ++srcIt) {
+#ifdef MFTDIFF_EXTRA_CHECKS
+	auto test = &*srcIt;
+	test = nullptr;
+#endif
+
+	for (; srcIt != srcEnd; ++srcIt) {
+#ifdef MFTDIFF_EXTRA_CHECKS
+		assert(test != &*srcIt); // verify progression
+		test = &*srcIt;
+#endif
 		segmentNo++;
 		if (this->progressCallback)
 			this->progressCallback->progress(segmentNo, false);
 
-		if (!mftSrc.isValidSegment(&*srcIt))
+		this->processAnySegment();
+
+		//Skip invalid segments entirely
+		//Even if on the dest they reference any clusters, those are "clusters not used anymore",
+		//handled by a single trimming of all unused clusters from the bitmaps comparison.
+		//Or better yet, left to occasional defrag /Retrim.
+		//Clusters of the MFT itself *will* be copied - the $MFT entry governs them. So the list of the used clusters *will* be up to date.
+		if (!mftSrc.isValidSegment(&*srcIt)) {
 			continue;
+		}
 		if ((srcIt->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
 
-		//0 is a valid segment number but sequenceNumber==0 is reserved so segment:sequence==0:0 safely indicates "not set".
-		SegmentNumber baseSegmentNumber = -1; //We use -1 for the same here
-		if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
-			baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
+		scanStats.usedSegments++;
 
-		if (baseSegmentNumber < 0)
-			for (auto& attr : AttributeIterator(&(*srcIt)))
-				if (attr.TypeCode == $ATTRIBUTE_LIST) {
-					baseSegmentNumber = segmentNo;
-					break;
-				}
+		this->processValidSegment();
 
-
-		//Find appropriate permanent or temporary segmentEntry for this segment
-		FileEntry* segmentEntry = nullptr;
-		if (baseSegmentNumber >= 0) {
-			segmentEntry = &filemap[baseSegmentNumber];
-			assert(segmentEntry->multisegment || segmentEntry->totalClusters == 0); //Either it's new or already multisegment
-			segmentEntry->multisegment = true;
-		}
-		else {
-			segmentEntry = &filemap[segmentNo];
-		}
-
-		//Process the attributes
-		this->processAttributes(segmentNo, segmentEntry, &(*srcIt));
 	}
 }
+
+//Called for every MFT segment, valid or not.
+void MftScan::processAnySegment()
+{
+}
+
+//Called for valid MFT segments which are IN_USE
+void MftScan::processValidSegment()
+{
+	//0 is a valid segment number but sequenceNumber==0 is reserved so segment:sequence==0:0 safely indicates "not set".
+	baseSegmentNumber = -1; //We use -1 for the same here
+	if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
+		baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
+
+	if (baseSegmentNumber < 0)
+		for (auto& attr : AttributeIterator(srcIt.segment))
+			if (attr.TypeCode == $ATTRIBUTE_LIST) {
+				baseSegmentNumber = segmentNo;
+				break;
+			}
+
+
+	//Select permanent or temporary entry
+	auto segmentEntry = this->selectSegmentEntry();
+
+	//Process the attributes
+	this->processAttributes(segmentNo, segmentEntry, srcIt.segment);
+
+}
+
+
+/*
+Find appropriate permanent or temporary segmentEntry for the current segment.
+
+Permanent records are always associated with multi-segment files.
+Otherwise it depends on the flags.
+*/
+FileEntry* MftScan::selectSegmentEntry()
+{
+	/*
+	Reasons to access filemap:
+	1. This is a part of multisegment (base or extension) => skip the processing and append to multisegment.
+	2. We've been asked to track all files.
+
+	In a Differ descendant:
+	3. Plain segment is dirty and we need to filemapListDirty.
+	4. To check if this segment is pre-configured for skip or dirty.
+	Final option requires us to check anyways.
+
+	We COULD have skipped the check in this base scanner but it can be reused if we don't.
+	Whatever is the reason this level or the levels below pushed a permanent entry, if it exists we have to use it.
+	*/
+	FileEntry* segmentEntry = nullptr;
+	if (baseSegmentNumber >= 0) {
+		segmentEntry = &filemap[baseSegmentNumber];
+		assert(segmentEntry->multisegment || segmentEntry->totalClusters == 0); //Either it's new or already multisegment
+		segmentEntry->multisegment = true;
+		scanStats.multiSegments++;
+	}
+	else if (this->filemapListAll) {
+		segmentEntry = &filemap[segmentNo];
+	}
+	else {
+		auto it = filemap.find(segmentNo);
+		if (it == filemap.end()) {
+			segmentEntry = &tempSegmentEntry;
+			segmentEntry->reset();
+		}
+		else
+			segmentEntry = &it->second;
+	}
+	return segmentEntry;
+}
+
 
 //Разбирает интересующие нас атрибуты сегмента segment в FileEntry* segmentEntry.
 void MftScan::processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry, FILE_RECORD_SEGMENT_HEADER* segment)
@@ -128,7 +211,6 @@ void MftScan::processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry
 		if (attr.TypeCode == $FILE_NAME && filenames != nullptr)
 			filenames->process(segmentNo, attr);
 		if (attr.FormCode != NONRESIDENT_FORM) continue;
-		if (attr.TypeCode == $INDEX_ALLOCATION) segmentEntry->hasIndexAllocations = true;
 		for (auto& run : DataRunIterator(&attr, DRI_SKIP_SPARSE)) {
 			assert(run.offset >= 0); //We asked the iterator to skip sparse runs
 			//assert(run.offset >= 0 || (attr.Flags & ATTRIBUTE_FLAG_SPARSE)); //Sparse runs are supposed to only appear in sparse attributes!
@@ -237,170 +319,25 @@ void MftDiff::scanInit()
 {
 	MftScan::scanInit();
 
-	//Убеждаемся, что конфигурация диска одна и та же
+	//Verify that the volume params are identical
 	assert(TotalClusters == mftDest.vol->volumeData().TotalClusters.QuadPart);
 	assert(BytesPerFileRecordSegment == mftDest.vol->volumeData().BytesPerFileRecordSegment);
 
 	this->verifyMftRunsCompatible();
 
+	auto destIter = SegmentIter(&mftDest);
+	this->destIt = destIter.begin();
+	this->destEnd = destIter.end();
+
 	srcDiff.resize(TotalClusters);
 	srcDiff.clear_all();
 }
 
-
 void MftDiff::scan()
 {
-	this->scanInit();
+	MftScan::scan();
 
-	FileEntry tempSegmentEntry{};
-
-	SegmentNumber segmentNo = -1;
-
-	auto srcIter = SegmentIter(&mftSrc);
-	auto srcIt = srcIter.begin();
-	auto destIter = SegmentIter(&mftDest);
-	auto destIt = destIter.begin();
-
-#ifdef MFTDIFF_EXTRA_CHECKS
-	auto test = &*srcIt;
-	test = nullptr;
-#endif
-
-	for (; srcIt != srcIter.end(); ++srcIt) {
-#ifdef MFTDIFF_EXTRA_CHECKS
-		assert(test != &*srcIt); // verify progression
-		test = &*srcIt;
-#endif
-		segmentNo++;
-		if (this->progressCallback)
-			this->progressCallback->progress(segmentNo, false);
-
-		bool dirty = false;
-		if (segmentNo > 0) { //For segmentNo==0 we've already read destIter.begin().
-			//Extract this exact segment from the right-side MFT.
-			//This has to be done even if the left side is invalid as two sides have to march in lockstep.
-			if (destIt != destIter.end())
-				++destIt;
-			if (destIt != destIter.end());
-			else
-				dirty = true;
-		}
-
-		//Невалидные слева сегменты пропускаем
-		//Даже если когда-то они ссылались на какие-то кластеры, всё это сводится к ситуации "кластеры больше не используются",
-		//которая решается однократным выкидыванием всех вновь занулённых кластеров по сравнению двух битмапов.
-		//Или ещё лучше, вообще нами не решается, а делается время от времени defrag /Retrim.
-		//Все кластеры самих MFT *будут* скопированы - за это отвечает запись MFT. И поэтому список фактически используемых кластеров *станет* актуальным.
-		if (!mftSrc.isValidSegment(&*srcIt)) {
-			continue;
-		}
-		if ((srcIt->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
-
-		stats.usedSegments++;
-
-		//Если итератор справа есть, то сравниваем кластеры.
-		if (!dirty) {
-			/*
-			Very often, the update sequence number will increase without anything else changing at all, to the files not touched in ages.
-			I have no idea why this happens. None of the ideas suggested by me or Gemini makes sense.
-			Probably will have to parse $UsnJrnl to find this out. Anyway, zero out this USHORT to avoid these false matches.
-			NOTE: We still want to copy the updated MFT entry with the new magic number just in case! But not the clusters with the data for this file.
-			*/
-			*((USHORT*)((char*)srcIt.segment + srcIt.segment->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
-			*((USHORT*)((char*)destIt.segment + destIt.segment->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
-			dirty = (0 != memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
-			if (dirty)
-				stats.dirtyBecauseOfCmp++;
-		}
-
-
-		//Дальше выясняем, является ли этот сегмент особым.
-		//Простые сегменты можно сразу же помечать по кластерам. Для особых нужно добавить их кластеры в базовую запись.
-		//Выяснить, что кластер особый, иногда можно сразу (base_segment), а иногда только после перебора атрибутов.
-
-		//0 is a valid segment number but sequenceNumber==0 is reserved so segment:sequence==0:0 safely indicates "not set".
-		SegmentNumber baseSegmentNumber = -1; //We use -1 for the same here
-		if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
-			baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
-
-		//SequenceNumber не особо важен в этих целях.
-		//Можно было бы попытаться что-то сделать за одну итерацию атрибутов, но тогда пришлось бы сохранять отдельно все увиденные runs,
-		//т.к. в любой момент может выйти, что их всё-таки надо было в *какой-то* записи регистрировать.
-		//Пробежать лишний раз по атрибутам дешевле этих операций с памятью.
-		//Кроме того, нам нужно предварительно собрать и ещё кое-какую информацию.
-		if (baseSegmentNumber < 0)
-			for (auto& attr : AttributeIterator(&(*srcIt)))
-				if (attr.TypeCode == $ATTRIBUTE_LIST) {
-					baseSegmentNumber = segmentNo;
-				}
-				else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty && !dirty) {
-					dirty = true;
-					stats.dirtyBecauseOfIndex++;
-				}
-				else if (attr.TypeCode == $FILE_NAME && !dirty) {
-					//Any time a file is included in a dir, it gets another $FILE_NAME with backreference to that dir
-					//Any backreference to a dirtySegmentRoot means the segment should be marked dirty.
-					AttrFilename attrFn{ &attr };
-					if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0
-						&& dirtySubtreeRoots.find(attrFn.fn->ParentDirectory.segmentNumber()) != dirtySubtreeRoots.end())
-					{
-						dirty = true;
-						stats.dirtyBecauseOfParent++;
-					}
-				}
-
-
-		//By this point we should have determined whether this local segment is dirty
-		if (dirty)
-			stats.dirtySegments++;
-
-
-		//Reasons to access filemap:
-		//1. This is a part of multisegment (base or extension) => skip the processing and append to multisegment.
-		//2. Plain segment is dirty and we need to filemapListDirty.
-		//3. To check if this segment is pre-configured for skip or dirty.
-		//Third option requires us to check anyways.
-
-		//Find appropriate permanent or temporary segmentEntry for this segment
-		FileEntry* segmentEntry = nullptr;
-		if (baseSegmentNumber >= 0) {
-			segmentEntry = &filemap[baseSegmentNumber];
-			assert(segmentEntry->multisegment || segmentEntry->totalClusters == 0); //Either it's new or already multisegment
-			segmentEntry->multisegment = true;
-			stats.multiSegments++;
-		} else if (dirty && this->filemapListDirty) {
-			segmentEntry = &filemap[segmentNo];
-		}
-		else if (this->filemapListAll) {
-			segmentEntry = &filemap[segmentNo];
-		} else {
-			auto it = filemap.find(segmentNo);
-			if (it == filemap.end()) {
-				segmentEntry = &tempSegmentEntry;
-				segmentEntry->reset();
-			} else
-				segmentEntry = &it->second;
-		}
-
-		//If this entry has been marked dirty ahead of time, respect that and mark its clusters dirty.
-		if (segmentEntry->dirty)
-			dirty = true;
-
-		//Mark the dirtiness down in the temporary, permanent standalone or permanent multisegment entry.
-		if (dirty)
-			segmentEntry->dirty = true;
-
-		//Process the attributes
-		this->processAttributes(segmentNo, segmentEntry, &(*srcIt));
-
-		//Mark single-segment files immediately
-		if (dirty && !segmentEntry->multisegment)
-			this->onDirtyFile(segmentNo, *segmentEntry);
-	}
-
-
-
-	//Теперь проходим filemap и выставляем все кластеры от файлов, у которых хотя бы один сегмент dirty.
+	//On completion, scan filemap and mark all clusters for the dirty multisegments
 	for (auto& pair : filemap)
 		if (pair.second.dirty && pair.second.multisegment) {
 			this->onDirtyFile(pair.first, pair.second);
@@ -416,11 +353,123 @@ void MftDiff::scan()
 #endif
 }
 
+void MftDiff::processAnySegment()
+{
+	//Extract this exact segment from the right-side MFT.
+	//This has to be done even if the left side is invalid as two sides have to march in lockstep.
+	if (segmentNo > 0) { //For segmentNo==0 we've already read destIter.begin().
+		if (destIt != destEnd)
+			++destIt;
+	}
+}
+
+void MftDiff::processValidSegment()
+{
+	auto& dirty = segmentDirty;
+	dirty = false;
+
+	//If we have a segment on the right, compare the data:
+	if (destIt != destEnd) {
+		/*
+		Very often, the update sequence number will increase without anything else changing at all, to the files not touched in ages.
+		I have no idea why this happens. None of the ideas suggested by me or Gemini makes sense.
+		Probably will have to parse $UsnJrnl to find this out. Anyway, zero out this USHORT to avoid these false matches.
+		NOTE: We still want to copy the updated MFT entry with the new magic number just in case! But not the clusters with the data for this file.
+		*/
+		*((USHORT*)((char*)srcIt.segment + srcIt->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
+		*((USHORT*)((char*)destIt.segment + destIt->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
+		dirty = (0 != memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
+		if (dirty)
+			diffStats.dirtyBecauseOfCmp++;
+	} else
+		dirty = true;
+
+
+	//Simple segments can be marked on the map immediately. Multisegments have to be delayed until the end of the scan.
+	//Multisegments are those with either base_segment set or $ATTRIBUTE_LIST in their attributes.
+
+	//0 is a valid segment number but sequenceNumber==0 is reserved so segment:sequence==0:0 safely indicates "not set".
+	baseSegmentNumber = -1; //We use -1 for the same here
+	if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
+		baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
+
+	//SequenceNumber не особо важен в этих целях.
+	//Можно было бы попытаться что-то сделать за одну итерацию атрибутов, но тогда пришлось бы сохранять отдельно все увиденные runs,
+	//т.к. в любой момент может выйти, что их всё-таки надо было в *какой-то* записи регистрировать.
+	//Пробежать лишний раз по атрибутам дешевле этих операций с памятью.
+	//Кроме того, нам нужно предварительно собрать и ещё кое-какую информацию.
+	if (baseSegmentNumber < 0)
+		for (auto& attr : AttributeIterator(srcIt.segment))
+			if (attr.TypeCode == $ATTRIBUTE_LIST) {
+				baseSegmentNumber = segmentNo;
+			}
+			else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty && !dirty) {
+				dirty = true;
+				diffStats.dirtyBecauseOfIndex++;
+			}
+			else if (attr.TypeCode == $FILE_NAME && !dirty) {
+				//Any time a file is included in a dir, it gets another $FILE_NAME with backreference to that dir
+				//Any backreference to a dirtySegmentRoot means the segment should be marked dirty.
+				AttrFilename attrFn{ &attr };
+				if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0
+					&& dirtySubtreeRoots.find(attrFn.fn->ParentDirectory.segmentNumber()) != dirtySubtreeRoots.end())
+				{
+					dirty = true;
+					diffStats.dirtyBecauseOfParent++;
+				}
+			}
+
+
+	//By this point we should have determined whether this local segment is dirty
+	if (dirty)
+		diffStats.dirtySegments++;
+
+
+	//Find appropriate permanent or temporary entry for this segment
+	FileEntry* segmentEntry = this->selectSegmentEntry();
+
+	//Process the attributes
+	this->processAttributes(segmentNo, segmentEntry, srcIt.segment);
+
+	//Mark single-segment files immediately
+	if (dirty && !segmentEntry->multisegment)
+		this->onDirtyFile(segmentNo, *segmentEntry);
+}
+
+
+FileEntry* MftDiff::selectSegmentEntry()
+{
+	auto& dirty = segmentDirty;
+	FileEntry* segmentEntry = nullptr;
+
+	//Force-route multisegments to inherited before doing our special cases, because they need a *different* segmentNumber cell + complex processing
+	if (baseSegmentNumber >= 0)
+		segmentEntry = MftScan::selectSegmentEntry();
+	else if (dirty && this->filemapListDirty) {
+		segmentEntry = &filemap[segmentNo];
+	}
+	else
+		segmentEntry = MftScan::selectSegmentEntry();
+
+	//If this entry has been marked dirty ahead of time, respect that and mark its clusters dirty.
+	//For multisegment entries this will also expand their cumulative dirtyness to local dirtyness which is fine.
+	if (segmentEntry->dirty)
+		dirty = true;
+
+	//Mark the dirtiness down in the temporary, permanent standalone or permanent multisegment entry.
+	if (dirty)
+		segmentEntry->dirty = true;
+
+	return segmentEntry;
+}
+
+
+
 void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
 {
 	if (fi.skip) {
-		stats.filesSkipped++;
-		stats.clustersSkipped += fi.totalClusters;
+		diffStats.filesSkipped++;
+		diffStats.clustersSkipped += fi.totalClusters;
 		return;
 	}
 

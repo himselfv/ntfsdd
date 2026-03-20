@@ -189,7 +189,6 @@ struct SegmentIteratorBuffered : public SegmentIteratorBase {
 };
 
 
-
 struct SegmentIteratorOverlapped : public SegmentIteratorBase {
 	AsyncFileReader* reader = nullptr;
 
@@ -207,6 +206,8 @@ struct SegmentIteratorOverlapped : public SegmentIteratorBase {
 
 	SegmentIteratorOverlapped(Mft* mft, Flags flags = 0);
 	~SegmentIteratorOverlapped();
+	SegmentIteratorOverlapped(SegmentIteratorOverlapped&& other);
+	SegmentIteratorOverlapped& operator=(SegmentIteratorOverlapped&& other);
 
 	/*
 	В этом итераторе итерация по кластерам runs (постановка на чтение) и указатель на прочитанные данные независимы.

@@ -1,6 +1,7 @@
 #pragma once
 /*
-Calculates differences between the two related MFTs and builds a map of candidate clusters on disk
+MFT scanner and MFT differ.
+Calculates differences between two related MFTs and builds a map of candidate clusters on disk
 to be checked for differences.
 */
 #include <vector>
@@ -10,43 +11,14 @@ to be checked for differences.
 #include "ntfsmft.h"
 #include "mftutil.h"
 
+
 /*
-There are two ways to store the candidate cluster list: as a bitmap or as a run list.
-
-Run list can be more efficient in theory. We're normally not going to have a lot of run candidates
-and we want to read/write in continuous chunks anyway.
-
-Bitmaps are easier to compare/contrast, incl. w/other types of bitmaps, easier to work with.
-
-With the comparatively efficient SpanIterator bitmaps do in practice work well,
-so for now we're sticking with them.
-
-Still, this is a class for run lists.
-We're going to make this a little bit compatible with Bitmap, but do not expect us to handle overlapping ClusterRuns.
-These do not normally occur in our tasks.
+MFT scanner: Scans the source MFT, building the list of files if requested.
+Built as a base for MFT differ.
 */
-class ClusterRunList : public std::vector<ClusterRun> {
-public:
-	ClusterRunList() {
-		//Reserve a lot of space for efficiency
-		this->reserve(8192);
-	}
-	inline void set(const LCN offset, const LCN length) { this->emplace_back(offset, length); }
-	inline void set(const ClusterRun& run) { this->push_back(run); }
-};
-
-//typedef ClusterRunList CandidateClusterMap;
-typedef BitmapBuf CandidateClusterMap;
-
-struct DiffStats {
+struct ScanStats {
 	SegmentNumber usedSegments = 0;
-	SegmentNumber dirtySegments = 0;
 	SegmentNumber multiSegments = 0;
-	SegmentNumber filesSkipped = 0;
-	SegmentNumber clustersSkipped = 0;
-	SegmentNumber dirtyBecauseOfCmp = 0;
-	SegmentNumber dirtyBecauseOfIndex = 0; //Segments marked dirty because of a "mark all indexes dirty" rule
-	SegmentNumber dirtyBecauseOfParent = 0; //Segments marked dirty because their parent is "mark children dirty".
 	void print(int BytesPerCluster);
 };
 
@@ -56,24 +28,21 @@ struct FileEntry {
 	bool multisegment = false; //Multisegment file detected
 	std::vector<ClusterRun> runList;
 	LCN totalClusters = 0;
-	bool hasIndexAllocations = false;
 	void reset() {
 		this->dirty = false;
 		this->skip = false;
 		this->multisegment = false;
 		this->runList.clear();
 		this->totalClusters = 0;
-		this->hasIndexAllocations = false;
 	}
 };
 //MftFilemap is a map because we often need just a bunch of entries
 typedef std::unordered_map<SegmentNumber, FileEntry> MftFilemap;
 
-
 struct FilenameEntry {
 	std::string filename;
-	bool filenameNtfs = false;
 	SegmentNumber parentDir = -1;
+	bool filenameNtfs = false;
 };
 
 //FilenameMap is a vector bc when we build it, we need all of the names (all of the used segments; large share of all).
@@ -89,22 +58,38 @@ public:
 Scans one MFT table and builds the list of files.
 */
 class MftScan {
-protected:
+protected: //Processing
 	LCN TotalClusters = 0;
 	int BytesPerFileRecordSegment = 0;
 	LCN totalSegments = 0;
 	virtual void scanInit();
+	virtual void processAnySegment();
+	virtual void processValidSegment();
 	void processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry, FILE_RECORD_SEGMENT_HEADER* segment);
+
+protected: //Current entry being processed
+	SegmentIterator srcIt {nullptr, 0};
+	SegmentNumber segmentNo = -1;
+	SegmentNumber baseSegmentNumber; //-1 = standalone segment
+	bool segmentDirty = false;
+	FileEntry tempSegmentEntry {};
+	virtual FileEntry* selectSegmentEntry();
+
 
 public:
 	Mft& mftSrc;
+
 	BitmapBuf srcUsed;
+	ScanStats scanStats;
 
 	/*
 	Add files (segments) to mark them for skipping or force-copying.
 	On exit, contains entries for some of the files processed, including any explicitly requested by flags below.
 	*/
 	MftFilemap filemap;
+
+	//If set, filemap will include ALL files. Warning: This may take a lot of memory.
+	bool filemapListAll = false;
 
 	//If set, $FILENAME attributes will be processed and file names collected. Only the first filename for every file is recorded.
 	//Warning: slow and memory-non-trivial!
@@ -116,27 +101,48 @@ public:
 	virtual void scan();
 };
 
+
+
 /*
 Compares two related MFT tables.
 Builds maps of clusters mentioned by potentially changed file entries.
 */
+
+typedef BitmapBuf CandidateClusterMap;
+
+struct DiffStats {
+	SegmentNumber dirtySegments = 0;
+	SegmentNumber filesSkipped = 0;
+	SegmentNumber clustersSkipped = 0;
+	SegmentNumber dirtyBecauseOfCmp = 0;
+	SegmentNumber dirtyBecauseOfIndex = 0; //Segments marked dirty because of a "mark all indexes dirty" rule
+	SegmentNumber dirtyBecauseOfParent = 0; //Segments marked dirty because their parent is "mark children dirty".
+	void print(int BytesPerCluster);
+};
+
 class MftDiff : public MftScan {
 protected:
 	virtual void scanInit() override;
+	virtual void processAnySegment() override;
+	virtual void processValidSegment() override;
+
+
+protected: //Current entry being processed
+	SegmentIterator destIt {nullptr, 0};
+	SegmentIterator destEnd {nullptr, 0};
+	bool dirty = false;
+	virtual FileEntry* selectSegmentEntry();
 
 public:
 	Mft& mftDest;
 
-	DiffStats stats;
+	DiffStats diffStats;
 
 	//Populated during the scan
 	CandidateClusterMap srcDiff;
 
 	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;
-
-	//If set, filemap will include ALL files. Warning: This may take a lot of memory.
-	bool filemapListAll = false;
 
 	/*
 	Index entries are unreliable: they sometimes update minor DUPLICATE_INFORMATION fields without changing anything in the MFT.
@@ -181,7 +187,6 @@ public:
 	*/
 	std::unordered_set<SegmentNumber> dirtySubtreeRoots {};
 	void addDirtySubtreeRoots(const std::unordered_set<SegmentNumber>& segments);
-
 
 public:
 	MftDiff(Mft& mftSrc, Mft& mftDest);
