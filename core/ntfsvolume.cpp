@@ -244,7 +244,7 @@ void Volume::initLayout(const NTFS_VOLUME_DATA_BUFFER& volumeData, const NTFS_EX
 	this->m_volumeData.volumeData = volumeData;
 	this->m_volumeData.extendedVolumeData = extData;
 
-	if (this->PhysicalSectorSize < extData.BytesPerPhysicalSector)
+	if (this->PhysicalSectorSize < (int32_t)extData.BytesPerPhysicalSector)
 		this->PhysicalSectorSize = extData.BytesPerPhysicalSector;
 }
 

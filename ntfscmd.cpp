@@ -1,7 +1,6 @@
 #include <windows.h>
 #include <string>
 #include <unordered_set>
-#include <CLI/CLI.hpp>
 #include "CLI11helper.h"
 #include "ntfs.h"
 #include "util.h"
@@ -299,7 +298,7 @@ int main2(int argc, char* argv[]) {
 	for (auto& idx : dumpClusters) {
 		src.setFilePointer(idx*buf.size());
 		DWORD bytesRead = 0;
-		OSCHECKBOOL(src.read(buf.data(), buf.size(), &bytesRead, nullptr));
+		OSCHECKBOOL(src.read(buf.data(), (DWORD)buf.size(), &bytesRead, nullptr));
 		assert(bytesRead == buf.size());
 		std::cout << std::endl << "Cluster #" << std::to_string(idx) << " dump:" << std::endl;
 		if (bDumpRaw)

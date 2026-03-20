@@ -30,7 +30,7 @@ TEST_CASE("SlicedRunEquivalence", "[ClusterRun]") {
 		randomFill(bmp);
 		result1.clear_all();
 		result2.clear_all();
-		int slice_size = i+1; //Just try all various slice sizes
+		int slice_size = (int)(i+1); //Just try all various slice sizes
 
 		for (auto& span : BitmapSpans(&bmp))
 			result1.set(span);

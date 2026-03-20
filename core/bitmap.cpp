@@ -315,7 +315,7 @@ void BitmapSpans::Iterator::skip0s() {
 	if (!this->ptr) return;
 	current.offset += current.length; //Roll the previous length into the position.
 	current.length = 0;
-	if (current.offset >= size) {
+	if (current.offset >= (LCN)size) {
 		this->ptr = nullptr;
 		return;
 	}

@@ -57,21 +57,51 @@ inline HRESULT comCheck(HRESULT hr, const char* context) {
 #define HRCHECK(...) comCheck(__VA_ARGS__, #__VA_ARGS__)
 
 
+class AssertionFailure : public std::runtime_error {
+public:
+	using runtime_error::runtime_error;
+};
+
+template<typename First>
+inline std::string parampack_join_strings(const std::string& sep, First first)
+{
+	return first;
+}
+
+template<typename First, typename... Args>
+inline std::string parampack_join_strings(const std::string& sep, First first, Args&&... args)
+{
+	return first + sep + parampack_join_strings(sep, args...);
+}
+
+inline AssertionFailure format_assert(const std::string& text)
+{
+	return AssertionFailure(
+		std::string{ "Assertion failed: " }
+		+ text
+	);
+};
+
+template<typename... Args>
+inline AssertionFailure format_assert(const std::string& text, Args&&... args) {
+	return AssertionFailure(
+		std::string{ "Assertion failed: " }
+		+ text + "\n"
+		+ parampack_join_strings("\n", args...)
+	);
+}
+
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 #undef assert
-#define assert(COND) \
+#define assert(COND,...) \
 	do { \
-    if(!(COND)) throw std::runtime_error( \
-        std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ":\n" #COND) \
-    ); \
+		if(!(COND)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #COND), __VA_ARGS__); \
 	} while (0)
 
-#define assert_eq(VAL1,VAL2) \
+#define assert_eq(VAL1,VAL2,...) \
 	do { \
-    if(!(VAL1==VAL2)) throw std::runtime_error( \
-        std::string("Assertion failed: " __FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") == " #VAL2 " (" + std::to_string(VAL2) + ")" \
-    ); \
+		if(!(VAL1==VAL2)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") == " #VAL2 " (" + std::to_string(VAL2) + ")", __VA_ARGS__); \
 	} while (0)
 
 
@@ -79,6 +109,9 @@ std::string wcharToUtf8(const std::wstring& input);
 std::string wcharToUtf8(const wchar_t* first, const wchar_t* last);
 std::wstring utf8ToWchar(const std::string& input);
 
+
+
+//#define LOG(...) print_all(__VA_ARGS__)
 
 enum Verbosity {
 	Error = 0,
@@ -130,6 +163,68 @@ public:
 	std::string bytes(size_t count) { return dataSizeToStr(count); }
 	std::string clusters(LCN count) { return std::to_string(count) + " (" + dataSizeToStr(count*BytesPerCluster) + ")"; }
 };
+
+
+
+struct PerformanceFrequency {
+public:
+	LARGE_INTEGER value;
+	PerformanceFrequency() {
+		if (!QueryPerformanceFrequency(&value))
+			value.QuadPart = 1000; //dk any better
+	}
+	inline int64_t toMsec(int64_t val) {
+		return val / (value.QuadPart / 1000);
+	}
+};
+
+inline PerformanceFrequency& freq()
+{
+	static PerformanceFrequency p_freq;
+	return p_freq;
+}
+
+struct MeasureTime {
+protected:
+	const char* name;
+	LARGE_INTEGER m_start;
+public:
+	inline MeasureTime() : name("Tm") {
+		QueryPerformanceCounter(&m_start);
+	}
+	inline MeasureTime(const char* name) : name(name) {
+		QueryPerformanceCounter(&m_start);
+	}
+	//Auto-stop at scope exit
+	inline ~MeasureTime() {
+		this->done();
+	}
+	//Call to stop earlier than at scope exit
+	inline void done() {
+		if (m_start.QuadPart != 0) {
+			print(name);
+			m_start.QuadPart = 0;
+		}
+	}
+	//Print at arbitrary intermediate points
+	void print(const char* name) {
+		LARGE_INTEGER tm;
+		QueryPerformanceCounter(&tm);
+		qVerbose() << name << ": " << freq().toMsec(tm.QuadPart - m_start.QuadPart) << "ms" << std::endl;
+	}
+};
+
+//  Operation...
+//  Operation took: 25ms
+struct ScopedOp : public MeasureTime {
+public:
+	inline ScopedOp(const char* name)
+		: MeasureTime(name)
+	{
+		qInfo() << name << "..." << std::endl;
+	}
+};
+
 
 
 class ProgressCallback {

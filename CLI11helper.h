@@ -1,6 +1,11 @@
 #pragma once
 #include <string>
 #include <map>
+#pragma warning(push)
+#pragma warning(disable : 4800)
+#include <CLI/CLI.hpp>
+#pragma warning(pop)
+
 
 template<typename Enum>
 struct EnumItemInfo {
