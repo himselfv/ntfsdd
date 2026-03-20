@@ -733,12 +733,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			We'll have to disable it.
 		*/
 		if (filenamePrinter.active() && !mftScanner) {
-			MftScan scan(src.mft);
-			scan.scan();
-			filemap = std::move(scan.filemap);
-			//The cheapest way to make this map work with MFT-branch-depending code later is to mark everything dirty.
-			for (auto& entry : filemap)
-				entry.second.dirty = true;
+			mftScanner.reset(new MftScan(src.mft));
 		}
 
 		//If we have the MFT scanner for any reason, scan. Extract what we can.
@@ -761,6 +756,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 			//In AntiMFT mode, delay the bit flip until later.
 			//Most safety checks should run on the normal MFT selection.
+		} else {
+			//The cheapest way to make non-MFT map work with MFT-branch-depending code later is to mark everything dirty.
+			for (auto& entry : filemap)
+				entry.second.dirty = true;
 		}
 	}
 
@@ -842,6 +841,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		srcBitmap.asBitmap().andNot(srcSelect, srcSelect);
 		selectedClusterCount = srcSelect.bitCount();
 		qInfo() << "AntiMFT: Selected cluster count: " << selectedClusterCount << ", size: " << dataSizeToStr(selectedClusterCount*src.volumeData().BytesPerCluster) << std::endl;
+		//Mark every single file dirty to test dirty clusters against them - if there are unaccounted differences, we do not know which files they belong to.
+		for (auto& entry : filemap)
+			entry.second.dirty = true;
 	}
 
 
@@ -905,10 +907,11 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			diffClustersInFilesTotal += bitCount;
 		}
 
-		//Must match diffClusterCount
-		qInfo() << "Clusters in diff files: " << diffClustersInFilesTotal << std::endl;
-		if (diffClustersInFilesTotal != diffClusterCount)
-			qWarning() << "Clusters in diff files don't match diff clusters! We're probably parsing something wrong but it's too late to bug out now." << std::endl;
+		if (mode != DdMode::AntiMFT) { //In AntiMFT we have inverted diff, it will not match
+			qInfo() << "Clusters in diff files: " << diffClustersInFilesTotal << std::endl;
+			if (diffClustersInFilesTotal != diffClusterCount)
+				qWarning() << "Clusters in diff files don't match diff clusters! We're probably parsing something wrong but it's too late to bug out now." << std::endl;
+		}
 	}
 
 
