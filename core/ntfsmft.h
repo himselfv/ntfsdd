@@ -52,7 +52,7 @@ public:
 	LCN getLcn(VCN vcn);
 	//Некоторые файлы могут быть sparse, но иногда хочется проверить, что дыр нет.
 	VCN getFirstMissingVcn();
-	void addAttr(ATTRIBUTE_RECORD_HEADER* attr);
+	void addDataAttr(ATTRIBUTE_RECORD_HEADER* attr);
 	inline int64_t sizeInBytes() { return this->dataHeader.Form.Nonresident.FileSize; }
 	inline int64_t sizeInClusterMultiples() { return this->dataHeader.Form.Nonresident.AllocatedLength; }
 
@@ -77,6 +77,7 @@ public:
 	void loadMinimal();
 	void load();
 	void loadMftStructure(LCN lcnFirst);
+	void loadMftSegment(LCN lcn, bool primary);
 
 	inline int64_t sizeInSegments() { return this->sizeInBytes() / this->BytesPerFileSegment; }
 

@@ -1,8 +1,10 @@
 ﻿#pragma once
 #include <algorithm>
+#include <unordered_set>
 #include "ntfsmft.h"
 #include "mftutil.h"
 
+//Returns LCN associated with a given VCN, or -1 if the map does not cover this VCN.
 LCN NonResidentData::getLcn(VCN vcn) {
 	for (auto& span : this->m_vcnMap)
 		if (vcn < span.vcnStart)
@@ -11,7 +13,8 @@ LCN NonResidentData::getLcn(VCN vcn) {
 			return (span.lcnStart + vcn - span.vcnStart);
 	return (LCN)(-1);
 }
-//Некоторые файлы могут быть sparse, но иногда хочется проверить, что дыр нет.
+
+//Some files can be sparse but sometimes we'd like to check for no holes.
 VCN NonResidentData::getFirstMissingVcn() {
 	VCN vcn = 0;
 	for (auto& span : this->m_vcnMap)
@@ -21,7 +24,8 @@ VCN NonResidentData::getFirstMissingVcn() {
 			vcn = span.vcnStart + span.len + 1;
 	return (VCN)(-1);
 }
-void NonResidentData::addAttr(ATTRIBUTE_RECORD_HEADER* attr) {
+
+void NonResidentData::addDataAttr(ATTRIBUTE_RECORD_HEADER* attr) {
 	if (attr->Form.Nonresident.LowestVcn == 0) {
 		//Lowest run map attribute stores totals
 		this->dataHeader = *attr;
@@ -57,6 +61,208 @@ void NonResidentData::readAll(void* buf)
 
 
 
+/*
+So okay. $ATTRIBUTE_LIST weirdness.
+https://stackoverflow.com/questions/42777907/understanding-the-attribute-list-in-ntfs
+
+In short:
+Some attributes must stay resident.
+Some can be made non-resident once they become too large. The attribute itself then becomes a list of data runs. This list must stay resident.
+
+Once everything is maximally packed and still doesn't fit, additional segments are allocated and some resident data moved there.
+Attributes describing data runs can be split between segments:
+Base:    $Data, VCN=0..1000
+Extra1:  $Data, VCN=1001..2000
+Extra1:  $Data, VCN=2001..3000  //Two chunks in the same segment are not prohibited!
+Same type and name => chunks of the same attribute. Must not intersect.
+
+The base segment gets SOME of them + a RESIDENT $ATTRIBUTE_LIST attribute describing where ALL of them are (type, name, VCN, host segment).
+
+Once this $ATTRIBUTE_LIST overflows (very soon), it is made non-resident and the segment now hosts its data runs:
+$ATTRIBUTE_LIST: VCN=0..1000 -> LCN 15100-16100
+
+!! Be careful when processing these! Entries may span data run boundaries!
+
+
+At the very least, these things seem guaranteed:
+- If there are ANY attribute lists in the segment system, there's SOME $ATTRIBUTE_LIST in the base segment. (How else would you know)
+- The part of the $ATTRIBUTE_LIST that stays in the base segment always starts with VCN==0
+
+
+Once THIS data run list overflows the segment, things get confusing.
+
+Some people say TWO child $ATTRIBUTE_LISTs will be created in extra segments and the base one becomes resident and now only contains links to these two.
+
+Others say $ATTRIBUTE_LIST remains one, but gets fragmented as any other data run list can:
+Base:   $ATTRIBUTE_LIST, VCN=0..1000
+Extra1: $ATTRIBUTE_LIST, VCN=1001..2000
+Extra2: $ATTRIBUTE_LIST, VCN=2001..3000
+The creator now must ensure that there's enough info in VCNs 0..1000 to find Extra1, and enough in VCNs 0(sic)..2000 to find Extra2.
+
+The easiest way to achieve this is to place ALL $ATTRIBUTE_LIST chunk descriptions in the first VCNs, so that:
+- You encounter partial $ATTRIBUTE_LIST in the base.
+- You read its first VCNs
+- These describe where the other parts are.
+In reality, the entries in $ATTRIBUTE_LIST are ordered (by attr type, then by name). But $ATTRIBUTE_LIST is relatively low, so this may work.
+
+Perhaps this is indeed the rule, and people who talk of two other $ATTRIBUTE_LIST records have just misinterpreted the two chunks that they saw.
+Or maybe not! IDK.
+*/
+
+/*
+Anyway, my plan:
+1. EVERY segment, base or extended, can be simply processed directly. The chunks that fall into it are simply normal attribute chunks.
+2. So we don't have to use $ATTRIBUTE_LIST information. It's enough to parse each of the mentioned segments normally.
+
+The algorithm:
+
+Add base segment to the queue.
+For each segment in the queue:
+Read the segment, process the attributes normally. For non-resident attribute chunks, add the mentioned runs to their maps.
+When encountering $ATTRIBUTE_LIST,
+If it's resident, process immediately (see below).
+If it's non-resident, append the runs to its map and initiate attempt_to_advance()
+
+attempt_to_advance:
+Remember the current position in the $ATTRIBUTE_LIST data VCN. Start with VCN==0.
+While the position you're at + entry_size bytes after it are already mapped:
+Read more clusters to have a complete entry.
+Process it (see below).
+Advance
+Once you cannot read a complete entry, return and remember the position and unprocessed tail.
+
+Entry processing:
+When processing $ATTRIBUTE_LIST entries, do the only thing: collect mentioned segments and add them to the processing queue.
+
+So we need:
+- processed segments
+- collected segments
+- maplist for $ATTRIBUTE_LIST
+- advance(), maintains: VCN position, remainingLen in the current VCN
+
+*/
+
+class AttributeListProcessor : public NonResidentData {
+protected:
+	VCN m_nextVcn = 0;
+	std::vector<byte> m_buf; //Resize to be at least 2 clusters in size
+	byte* m_pos = nullptr;
+	void packBuffer(); //Moves unprocessed data to the beginning of the buffer
+
+	size_t tryReadEntry(byte* buf, size_t len);
+	bool tryReadMore();
+public:
+	std::unordered_set<SegmentNumber> segments;
+
+	AttributeListProcessor(Volume* vol);
+
+	//Process a complete independent chunk of data, usually from a resident $ATTRIBUTE_LIST.
+	//I know we're inheriting from NonResidentData, it's for simplicity.
+	void processData(void* data, size_t len);
+
+	//When processing segments and encountering a non-resident $ATTRIBUTE_LIST, call base addDataAttr() + advance()
+	//This will scan all currently available new sequential data and add attributes and segments mentioned.
+	void advance();
+};
+
+AttributeListProcessor::AttributeListProcessor(Volume* vol)
+	: NonResidentData(vol)
+{
+	m_buf.reserve(vol->volumeData().BytesPerCluster * 2);
+	m_pos = m_buf.data();
+}
+
+void AttributeListProcessor::packBuffer()
+{
+	size_t rem = m_buf.size() - (m_pos - m_buf.data());
+	memcpy(m_buf.data(), m_pos, rem);
+	m_buf.resize(rem);
+	m_pos = m_buf.data();
+}
+
+void AttributeListProcessor::processData(void* data, size_t len)
+{
+	size_t offset = 0;
+	while (auto readSz = tryReadEntry((byte*)data, len)) {
+		data = (void*)((byte*)data + readSz);
+		len -= readSz;
+	}
+	assert_eq(len, 0, "Unprocessed data in a standalone attribute list data block");
+}
+
+//0 if not enough data in the buffer for another entry
+size_t AttributeListProcessor::tryReadEntry(byte* buf, size_t len)
+{
+	if (len < sizeof(ATTRIBUTE_LIST_ENTRY))
+		return 0;
+
+	auto entry = reinterpret_cast<const ATTRIBUTE_LIST_ENTRY*>(m_pos);
+
+	//Some say this can be 0 and it means EOF for the list, can't find this in the docs,
+	//let's just assert for now.
+	assert_neq(entry->RecordLength, 0);
+	assert_greq(entry->RecordLength, sizeof(ATTRIBUTE_LIST_ENTRY));
+
+	if (len < entry->RecordLength)
+		return 0;
+
+	auto& ref = entry->SegmentReference;
+	this->segments.insert(ref.segmentNumber());
+
+	return entry->RecordLength;
+}
+
+/*
+TODO: How to handle a genuine EOF?
+A cluster-EOF is when we have reached the final cluster in the complete data run map. We do not know that,
+especially when processing this while collecting the chunks.
+Someone who prefers to study all ATTRIBUTE_LIST and figure it out might know that outside.
+We have to export the current position for them to study. (Perhaps the cluster position + the byte position).
+
+A byte-EOF is when we have reached the last meaningful byte for this attribute. Attribute definition
+must have this.
+In fact, we NEED the clients to give us that, or we'll be reading extra data.
+TODO TODO TODO
+*/
+bool AttributeListProcessor::tryReadMore()
+{
+	auto lcn = this->getLcn(this->m_nextVcn);
+	if (lcn < 0) return false;
+
+	auto clusterSize = vol->volumeData().BytesPerCluster;
+
+	OSCHECKBOOL(this->vol->setFilePointer(lcn*clusterSize));
+
+	packBuffer();
+	//To have m_pos at the beginning of the buffer.
+
+	auto oldSize = m_buf.size();
+	assert(oldSize < clusterSize); //We have reserved 2x this, so we need less than 1x used
+	//Honestly, we don't care: if someone reads ahead, whatever, let's try to update pointers after resize:
+	m_buf.resize(m_buf.size() + clusterSize);
+	m_pos = m_buf.data();
+
+	DWORD bytesRead = 0;
+	OSCHECKBOOL(this->vol->read(&m_buf[oldSize], clusterSize, &bytesRead, nullptr));
+	assert(bytesRead == clusterSize);
+}
+
+void AttributeListProcessor::advance()
+{
+	while (true) {
+		size_t rem = m_buf.size() - (m_pos - m_buf.data());
+		while (auto sz = tryReadEntry(m_pos, rem)) {
+			m_pos += sz;
+			rem -= sz;
+		}
+		if (!tryReadMore())
+			return;
+	}
+}
+
+
+
+
 Mft::Mft(Volume* volume)
 	: NonResidentData(volume)
 {
@@ -75,6 +281,27 @@ void Mft::loadMinimal()
 	this->BytesPerFileSegment = vol->volumeData().BytesPerFileRecordSegment;
 }
 
+/*
+$MFT consists of one or more cluster runs described in $Data.
+Run 0 by definition starts at MftStartLcn. Its length and the rest of the runs have to be collected from $Data attributes
+in its segment 0 ($MFT).
+
+$MFT segment 0 can and will spawn child segments (via $ATTRIBUTE_LIST) if gets too large.
+https://stackoverflow.com/questions/30424102/can-the-ntfs-mft-file-have-child-records
+$Data attributes can in theory get pushed out into these additional segments. This poses a problem. How to resolve the physical
+location of these additional segments if we don't yet know the map of logical to physical clusters.
+
+Hopefully, enough of $Data runs will be described in segment 0 to resolve the first extra segment, and enough in 0+extra1
+to resolve extra2, and so on.
+But as a safety measure, initial expansions are placed in reserved segments 15-20+ which are more or less guaranteed to be
+contiguous. So absent any runs, treat $MFT as a single flat space starting at segment 0.
+
+The approach:
+1. Until we have at least one run, treat all VCNs as flat space starting from segment 0.
+2. Read all the attributes at 0, including any data runs.
+3. $ATTRIBUTE_LIST can only occur here, not in extra segments.
+ If found, process its references sequentially, reading data runs from each segment before taking the next one.
+*/
 void Mft::load()
 {
 	this->loadMinimal();
@@ -83,28 +310,60 @@ void Mft::load()
 
 void Mft::loadMftStructure(LCN lcnFirst)
 {
+	this->m_vcnMap.clear();
+	this->loadMftSegment(lcnFirst, true);
+
+	//TODO: Sort VCNs after each addition? Verify no overlap?
+	assert(this->m_vcnMap.size() > 0); //MFT should not be empty
+	assert(this->m_vcnMap.front().lcnStart == lcnFirst); //First cluster should match the one we started with
+	assert(this->getFirstMissingVcn() == (uint64_t)(-1)); //Should be no spaces in the MFT
+	assert(this->sizeInBytes() % this->BytesPerFileSegment == 0);
+}
+
+/*
+Load one $MFT-related segment, either primary (segment 0) or secondary. Adds its $Data runs to the map.
+If it's primary, follows $ATTRIBUTE_LIST if it's found.
+*/
+void Mft::loadMftSegment(LCN lcn, bool primary)
+{
 	auto segment = newSegmentBuf();
-	readSegmentLcn(lcnFirst, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
+	readSegmentLcn(lcn, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
 	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
 
 	//Read attributes
 	ATTRIBUTE_RECORD_HEADER* attrData = nullptr;
+	ATTRIBUTE_RECORD_HEADER* attrAttrList = nullptr;
 	for (auto& attr : AttributeIterator(header)) {
 		if (attr.TypeCode == $DATA) {
-			assert(!attrData);
-			attrData = &attr;
+			if (attr.NameLength != 0)
+				qWarning() << "MFT: Alternate $Data streams in $MFT segment! Highly unusual. Ignoring.";
+			else {
+				assert(attrData->FormCode == NONRESIDENT_FORM, "MFT: $Data attribute in $MFT segment must be non-resident.");
+				this->addDataAttr(attrData);
+			}
 		}
-		assert(attr.TypeCode != $ATTRIBUTE_LIST); //Не поддерживаем $ATTRIBUTE_LIST в MFT!
+		assert(primary || attr.TypeCode != $ATTRIBUTE_LIST, "MFT: $ATTRIBUTE_LIST in a secondary segment is not allowed!");
+		if (attr.TypeCode == $ATTRIBUTE_LIST) {
+			assert(attrAttrList == nullptr, "MFT: Multiple $ATTRIBUTE_LISTs in a segment are not allowed!");
+			attrAttrList = &attr;
+		}
 	}
-	assert(attrData != nullptr);
-	assert(attrData->FormCode == NONRESIDENT_FORM);
-	assert(attrData->Form.Nonresident.LowestVcn == 0); //Поскольку $ATTRIBUTE_LIST не поддерживаем, то тут должен быть единственный атрибут, закрывающий весь VCN.
-	this->addAttr(attrData);
 
-	assert(this->m_vcnMap.size() > 0); //Должны быть элементы в MFT.
-	assert(this->m_vcnMap.front().lcnStart == lcnFirst); //Первый LCN MFT должен совпадать с полученным.
-	assert(this->getFirstMissingVcn() == (uint64_t)(-1)); //Не поддерживаем пробелы в MFT
-	assert(this->sizeInBytes() % this->BytesPerFileSegment == 0); //Размер должен быть кратен сегменту.
+
+	//Now we have loaded what $Data mapping we had in segment 0
+
+	//If we have $ATTRIBUTE_LIST, process it now.
+	if (attrAttrList) {
+		assert(attrAttrList->FormCode == RESIDENT_FORM);
+
+	} 
+
+	assert(attrAttrList == nullptr, "MFT: $ATTRIBUTE_LIST in MFT segment 0 is not yet supported!");
+
+	assert(attrData != nullptr);
+	assert(attrData->Form.Nonresident.LowestVcn == 0); //Поскольку $ATTRIBUTE_LIST не поддерживаем, то тут должен быть единственный атрибут, закрывающий весь VCN.
+
+
 }
 
 std::vector<char> Mft::newSegmentBuf()

@@ -69,7 +69,7 @@ typedef struct _MFT_SEGMENT_REFERENCE {
 		} classic;
 		ULONGLONG mergedValue;
 	};
-	inline ULONGLONG segmentNumber() { return classic.SegmentNumberLowPart + (classic.SegmentNumberHighPart << sizeof(ULONG)); }
+	inline ULONGLONG segmentNumber() const { return classic.SegmentNumberLowPart + (classic.SegmentNumberHighPart << sizeof(ULONG)); }
 } MFT_SEGMENT_REFERENCE, *PMFT_SEGMENT_REFERENCE;
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
@@ -229,6 +229,58 @@ typedef struct _ATTRIBUTE_RECORD_HEADER {
 #define NTFS_MAX_ATTR_NAME_LEN           (255)
 
 
+
+//  The Attributes List attribute is an ordered-list of quad-word
+//  aligned ATTRIBUTE_LIST_ENTRY records.  It is ordered first by
+//  Attribute Type Code, and then by Attribute Name (if present).
+//  No two attributes may exist with the same type code, name and
+//  LowestVcn.  This also means that at most one occurrence of a
+//  given Attribute Type Code without a name may exist.
+//
+//  To binary search this attribute, it is first necessary to make a
+//  quick pass through it and form a list of pointers, since the
+//  optional name makes it variable-length.
+
+// https://learn.microsoft.com/en-us/windows/win32/devnotes/attribute-list-entry
+
+typedef struct _ATTRIBUTE_LIST_ENTRY {
+    ATTRIBUTE_TYPE_CODE AttributeTypeCode;                          //  offset = 0x000
+
+    //  Size of this record in bytes, including the optional name
+    //  appended to this structure.
+    USHORT RecordLength;                                            //  offset = 0x004
+
+    //  Length of attribute name, if there is one.  If a name exists
+    //  (AttributeNameLength != 0), then it is a Unicode string of
+    //  the specified number of characters immediately following
+    //  this record.
+    UCHAR AttributeNameLength;                                      //  offset = 0x006
+
+    //  Reserved to get to quad-word boundary
+    UCHAR AttributeNameOffset;                                      //  offset = 0x007
+
+    //  Lowest Vcn for this attribute.  This field is always zero
+    //  unless the attribute requires multiple file record segments
+    //  to describe all of its runs, and this is a reference to a
+    //  segment other than the first one.  The field says what the
+    //  lowest Vcn is that is described by the referenced segment.
+    VCN LowestVcn;                                                  //  offset = 0x008
+
+    //  Reference to the MFT segment in which the attribute resides.
+    MFT_SEGMENT_REFERENCE SegmentReference;                         //  offset = 0x010
+
+    //  The file-record-unique attribute instance number for this
+    //  attribute.
+    USHORT Instance;                                                //  offset = 0x018
+
+    //  When creating an attribute list entry, start the name here.
+    //  (When reading one, use the AttributeNameOffset field.)
+    WCHAR AttributeName[1];                                         //  offset = 0x01A
+} ATTRIBUTE_LIST_ENTRY;
+typedef ATTRIBUTE_LIST_ENTRY *PATTRIBUTE_LIST_ENTRY;
+
+
+
 typedef struct _DUPLICATED_INFORMATION {
 
 	//
@@ -237,60 +289,60 @@ typedef struct _DUPLICATED_INFORMATION {
 
 	LONGLONG CreationTime;                                          //  offset = 0x000
 
-																	//
-																	//  Last time the DATA attribute was modified.
-																	//
+	//
+	//  Last time the DATA attribute was modified.
+	//
 
 	LONGLONG LastModificationTime;                                  //  offset = 0x008
 
-																	//
-																	//  Last time any attribute was modified.
-																	//
+	//
+	//  Last time any attribute was modified.
+	//
 
 	LONGLONG LastChangeTime;                                        //  offset = 0x010
 
-																	//
-																	//  Last time the file was accessed.  This field may not always
-																	//  be updated (write-protected media), and even when it is
-																	//  updated, it may only be updated if the time would change by
-																	//  a certain delta.  It is meant to tell someone approximately
-																	//  when the file was last accessed, for purposes of possible
-																	//  file migration.
-																	//
+	//
+	//  Last time the file was accessed.  This field may not always
+	//  be updated (write-protected media), and even when it is
+	//  updated, it may only be updated if the time would change by
+	//  a certain delta.  It is meant to tell someone approximately
+	//  when the file was last accessed, for purposes of possible
+	//  file migration.
+	//
 
 	LONGLONG LastAccessTime;                                        //  offset = 0x018
 
-																	//
-																	//  Allocated Length of the file in bytes.  This is obviously
-																	//  an even multiple of the cluster size.  (Not present if
-																	//  LowestVcn != 0.)
-																	//
+	//
+	//  Allocated Length of the file in bytes.  This is obviously
+	//  an even multiple of the cluster size.  (Not present if
+	//  LowestVcn != 0.)
+	//
 
 	LONGLONG AllocatedLength;                                       //  offset = 0x020
 
-																	//
-																	//  File Size in bytes (highest byte which may be read + 1).
-																	//  (Not present if LowestVcn != 0.)
-																	//
+	//
+	//  File Size in bytes (highest byte which may be read + 1).
+	//  (Not present if LowestVcn != 0.)
+	//
 
 	LONGLONG FileSize;                                              //  offset = 0x028
 
-																	//
-																	//  File attributes.  The first byte is the standard "Fat"
-																	//  flags for this file.
-																	//
+	//
+	//  File attributes.  The first byte is the standard "Fat"
+	//  flags for this file.
+	//
 
 	ULONG FileAttributes;                                           //  offset = 0x030
 
-																	//
-																	//  The size of buffer needed to pack these Ea's
-																	//
+	//
+	//  The size of buffer needed to pack these Ea's
+	//
 
 	USHORT PackedEaSize;                                            //  offset = 0x034
 
-																	//
-																	//  Reserved for quad word alignment
-																	//
+	//
+	//  Reserved for quad word alignment
+	//
 
 	USHORT Reserved;                                                //  offset = 0x036
 
@@ -310,22 +362,13 @@ typedef struct _FILE_NAME {
 	FILE_REFERENCE ParentDirectory;                                 //  offset = 0x000
 	DUPLICATED_INFORMATION Info;                                    //  offset = 0x008
 
-																	//
-																	//  Length of the name to follow, in (Unicode) characters.
-																	//
-
+	//  Length of the name to follow, in (Unicode) characters.
 	UCHAR FileNameLength;                                           //  offset = 0x040
 
-																	//
-																	//  FILE_NAME_xxx flags
-																	//
-
+	//  FILE_NAME_xxx flags
 	UCHAR Flags;                                                    //  offset = 0x041
 
-																	//
-																	//  First character of Unicode File Name
-																	//
-
+	//  First character of Unicode File Name
 	WCHAR FileName[1];                                              //  offset = 0x042
 
 } FILE_NAME;
