@@ -97,6 +97,11 @@ public:
 	inline bool eof() { return this->m_vcnEof && this->remainingBytesInBuf()==0; }
 };
 
+
+/*
+Processes resident and non-resident $ATTRIBUTE_LIST entries as they're passed to it,
+and accumulates information, currently just a growing list of all segments mentioned in those.
+*/
 class AttributeListProcessor : public NonResidentDataProcessor {
 protected:
 	//Process another $ATTRIBUTE_LIST entry if it's available. Store segments encountered.
