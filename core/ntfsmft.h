@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <unordered_set>
 #include <windows.h>
 #include "ntfs.h"
 #include "util.h"
@@ -45,14 +46,15 @@ Contains:
   ValidDataLength: <= actual size, performance optimization, do not use. Not always aligned on clusters in practice.
 */
 	ATTRIBUTE_RECORD_HEADER dataHeader;
+	inline bool haveDataHeader() { return dataHeader.RecordLength > 0; }
 public:
 	Volume* vol;
-	NonResidentData(Volume* vol) : vol(vol) {}
+	NonResidentData(Volume* vol);
 	inline const std::vector<VcnMapEntry>& vcnMap() { return this->m_vcnMap; }
 	LCN getLcn(VCN vcn);
 	//Некоторые файлы могут быть sparse, но иногда хочется проверить, что дыр нет.
 	VCN getFirstMissingVcn();
-	void addDataAttr(ATTRIBUTE_RECORD_HEADER* attr);
+	void addAttrChunk(ATTRIBUTE_RECORD_HEADER* attr);
 	inline int64_t sizeInBytes() { return this->dataHeader.Form.Nonresident.FileSize; }
 	inline int64_t sizeInClusterMultiples() { return this->dataHeader.Form.Nonresident.AllocatedLength; }
 
@@ -60,6 +62,52 @@ public:
 	//Only reads full clusters (== multiples of logical sectors). Make sure you have enough space - use sizeInClusterMultiples()!
 	void readAll(void* buf);
 };
+
+
+/*
+A class to process non-resident (and resident!) attribute data sequentially, as chunks of the VCN->LCN map become available.
+Mostly needed for $ATTRIBUTE_LIST processing below but can be reused for anything. See comments in the CPP.
+*/
+class NonResidentDataProcessor : public NonResidentData {
+protected:
+	VCN m_nextVcn = 0;
+	bool m_vcnEof = false;
+
+	AlignedBuffer m_buf; //Resize to be at least 2 clusters in size
+	byte* m_pos = nullptr;
+	inline size_t remainingBytesInBuf() { return m_buf.size() - (m_pos - m_buf.data()); }
+	void packBuffer(); //Moves unprocessed data to the beginning of the buffer
+
+	//Try to read next virtual cluster
+	bool tryReadMore();
+
+	//Process another entry. Override to handle specifics.
+	virtual size_t tryReadEntry(byte* buf, size_t len) = 0;
+public:
+	NonResidentDataProcessor(Volume* vol);
+
+	//Process a complete independent chunk of data, usually from a resident version of the attribute.
+	//I know we're inheriting from NonResidentData, it's for simplicity.
+	void processData(void* data, size_t len);
+
+	//When processing segments and encountering a non-resident attribute chunk, call base addDataAttr() + advance()
+	//This will scan all currently available new sequential data and process any complete entry.
+	int advance();
+
+	inline bool eof() { return this->m_vcnEof && this->remainingBytesInBuf()==0; }
+};
+
+class AttributeListProcessor : public NonResidentDataProcessor {
+protected:
+	//Process another $ATTRIBUTE_LIST entry if it's available. Store segments encountered.
+	virtual size_t tryReadEntry(byte* buf, size_t len) override;
+public:
+	//All segments encountered in this $ATTRIBUTE_LIST so far.
+	std::vector<SegmentNumber> segments;
+
+	using NonResidentDataProcessor::NonResidentDataProcessor;
+};
+
 
 
 /*
@@ -71,19 +119,22 @@ class Mft : public NonResidentData {
 public:
 	int32_t SectorsPerFileSegment = 0;
 	int BytesPerFileSegment = 0;
+
+protected:
+	AttributeListProcessor attrList;
+
 public:
 	Mft(Volume* volume);
 
 	void loadMinimal();
 	void load();
-	void loadMftStructure(LCN lcnFirst);
-	void loadMftSegment(LCN lcn, bool primary);
+	void loadMftSegment(SegmentNumber segmentNo);
 
 	inline int64_t sizeInSegments() { return this->sizeInBytes() / this->BytesPerFileSegment; }
 
-	std::vector<char> newSegmentBuf();
-	void readSegmentByIndex(int64_t segmentIndex, FILE_RECORD_SEGMENT_HEADER* segment);
-	void readSegmentLcn(LCN lcn, FILE_RECORD_SEGMENT_HEADER* segment);
+	AlignedBuffer newSegmentBuf();
+	void readSegmentByIndex(SegmentNumber segmentNo, FILE_RECORD_SEGMENT_HEADER* segment);
+	void readSegmentByIndexMinimal(SegmentNumber segmentNo, FILE_RECORD_SEGMENT_HEADER* segment);
 	void readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count);
 	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPOVERLAPPED lpOverlapped = nullptr);
 	void processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count, int* validCount = nullptr);
@@ -174,7 +225,7 @@ struct SegmentIteratorBuffered : public SegmentIteratorBase {
 
 	SegmentNumber remainingSegmentsInRun = 0;
 
-	std::vector<uint8_t> buffer;
+	AlignedBuffer buffer;
 	int64_t remainingBufferData = 0;
 
 	SegmentIteratorBuffered(Mft* mft, Flags flags = 0);
