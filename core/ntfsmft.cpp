@@ -109,7 +109,6 @@ void NonResidentDataProcessor::processData(void* data, size_t len)
 /*
 How to handle a genuine EOF?
 VCN==0 entry contains all the sizes. As soon as we have that, we know the final size.
-TODO: Align buffer on the cluster size!
 */
 bool NonResidentDataProcessor::tryReadMore()
 {
@@ -339,7 +338,6 @@ void Mft::load()
 	assert(this->m_vcnMap.front().lcnStart == this->vol->volumeData().MftStartLcn.QuadPart); //First cluster should match the one we started with
 	assert(this->getFirstMissingVcn() == (uint64_t)(-1)); //Should be no spaces in the MFT
 	assert(this->sizeInBytes() % this->BytesPerFileSegment == 0);
-
 }
 
 /*
