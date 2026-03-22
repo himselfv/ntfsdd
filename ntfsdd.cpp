@@ -734,6 +734,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		*/
 		if (filenamePrinter.active() && !mftScanner) {
 			mftScanner.reset(new MftScan(src.mft));
+			mftScanner->filemapListAll = true;
 		}
 
 		//If we have the MFT scanner for any reason, scan. Extract what we can.

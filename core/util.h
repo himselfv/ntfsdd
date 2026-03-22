@@ -105,20 +105,18 @@ inline AssertionFailure format_assert(const std::string& text, Args&&... args) {
 		if(!(COND)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #COND), __VA_ARGS__); \
 	} while (0)
 
-#define assert_eq(VAL1,VAL2,...) \
+#define assert_rel(VAL1,VAL2,REL,...) \
 	do { \
-		if(!(VAL1==VAL2)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") == " #VAL2 " (" + std::to_string(VAL2) + ")", __VA_ARGS__); \
+		if(!(VAL1 REL VAL2)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") " #REL " " #VAL2 " (" + std::to_string(VAL2) + ")", __VA_ARGS__); \
 	} while (0)
 
-#define assert_neq(VAL1,VAL2,...) \
-	do { \
-		if(!(VAL1!=VAL2)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") != " #VAL2 " (" + std::to_string(VAL2) + ")", __VA_ARGS__); \
-	} while (0)
+#define assert_eq(VAL1,VAL2,...) assert_rel(VAL1,VAL2,==)
+#define assert_neq(VAL1,VAL2,...) assert_rel(VAL1,VAL2,!=)
+#define assert_gt(VAL1,VAL2,...) assert_rel(VAL1,VAL2,>)
+#define assert_greq(VAL1,VAL2,...) assert_rel(VAL1,VAL2,>=)
+#define assert_lt(VAL1,VAL2,...) assert_rel(VAL1,VAL2,<)
+#define assert_leq(VAL1,VAL2,...) assert_rel(VAL1,VAL2,>=)
 
-#define assert_greq(VAL1,VAL2,...) \
-	do { \
-		if(!(VAL1>=VAL2)) throw format_assert(std::string(__FILE__ "@" STR(__LINE__) ":\n" #VAL1 " (") + std::to_string(VAL1) + ") >= " #VAL2 " (" + std::to_string(VAL2) + ")", __VA_ARGS__); \
-	} while (0)
 
 
 

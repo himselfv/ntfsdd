@@ -48,7 +48,7 @@ void ScanStats::print(int BytesPerCluster)
 void DiffStats::print(int BytesPerCluster)
 {
 	qInfo() << "Segments: dirty=" << dirtySegments;
-	qVerbose() << " bc: diff=" << dirtyBecauseOfCmp << ", index=" << dirtyBecauseOfIndex << ", parent=" << dirtyBecauseOfParent;
+	qVerbose() << " bc: diff=" << dirtyBecauseOfCmp << ", usn=" << dirtyBecauseOfUsnOnly << ", index=" << dirtyBecauseOfIndex << ", parent=" << dirtyBecauseOfParent;
 	qInfo() << std::endl;
 	if (filesSkipped != 0 || clustersSkipped != 0)
 		qInfo() << "Skipped: files=" << filesSkipped << ", clusters=" << clustersSkipped
@@ -376,11 +376,20 @@ void MftDiff::processValidSegment()
 		Probably will have to parse $UsnJrnl to find this out. Anyway, zero out this USHORT to avoid these false matches.
 		NOTE: We still want to copy the updated MFT entry with the new magic number just in case! But not the clusters with the data for this file.
 		*/
-		*((USHORT*)((char*)srcIt.segment + srcIt->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
-		*((USHORT*)((char*)destIt.segment + destIt->MultiSectorHeader.UpdateSequenceArrayOffset)) = 0x0000;
+		//We're comparing this after segment processing so the only place where this sequence number is preserved is in the fixup array.
+		auto srcUsnAddr = ((USHORT*)((char*)srcIt.segment + srcIt->MultiSectorHeader.UpdateSequenceArrayOffset));
+		auto destUsnAddr = ((USHORT*)((char*)destIt.segment + destIt->MultiSectorHeader.UpdateSequenceArrayOffset));
+		auto destUsnOrig = *destUsnAddr;
+		*destUsnAddr = *srcUsnAddr;
+
 		dirty = (0 != memcmp(&(*srcIt), &(*destIt), BytesPerFileRecordSegment));
 		if (dirty)
 			diffStats.dirtyBecauseOfCmp++;
+		
+		if (*srcUsnAddr != destUsnOrig && !dirty && !this->ignoreUsnChanges) {
+			dirty = true;
+			diffStats.dirtyBecauseOfUsnOnly++;
+		}
 	} else
 		dirty = true;
 

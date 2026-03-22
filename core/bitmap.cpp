@@ -13,7 +13,7 @@
 
 void Bitmap::set(size_t lo, size_t hi) {
 	if (lo > hi) return;
-	assert(hi < size);
+	assert_lt(hi, size);
 
 	size_t start_word = lo / BLOCK_BITS;
 	size_t end_word = hi / BLOCK_BITS;

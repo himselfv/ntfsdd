@@ -115,6 +115,7 @@ struct DiffStats {
 	SegmentNumber filesSkipped = 0;
 	SegmentNumber clustersSkipped = 0;
 	SegmentNumber dirtyBecauseOfCmp = 0;
+	SegmentNumber dirtyBecauseOfUsnOnly = 0; //Segments marked dirty because ONLY their USN has changed
 	SegmentNumber dirtyBecauseOfIndex = 0; //Segments marked dirty because of a "mark all indexes dirty" rule
 	SegmentNumber dirtyBecauseOfParent = 0; //Segments marked dirty because their parent is "mark children dirty".
 	void print(int BytesPerCluster);
@@ -140,6 +141,9 @@ public:
 
 	//Populated during the scan
 	CandidateClusterMap srcDiff;
+
+	//If set, do not consider segments where ONLY the USN has changed as dirty. Double-edged sword.
+	bool ignoreUsnChanges = true;
 
 	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;
