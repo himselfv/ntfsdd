@@ -54,22 +54,14 @@ TEST_CASE("Cross-border set/clear", "[Bitmap]") {
 }
 
 
-TEST_CASE("Bitmap to spans", "[Bitmap]") {
-	BitmapBuf bmp;
-	bmp.resize(4096);
 
-	std::vector<ClusterRun> src;
-	src.emplace_back(5, 5);
-	src.emplace_back(15, 5);
-	src.emplace_back(64, 1);
-	src.emplace_back(127, 65);
+
+void bmpEncodeDecode(BitmapBuf& bmp, const std::vector<ClusterRun>& src)
+{
+	bmp.clear_all();
 
 	for (auto& run : src)
 		bmp.set(run.offset, run.offset + run.length - 1);
-//	bmp.set(5, 10);
-//	bmp.set(15, 20);
-//	bmp.set(64, 65);
-//	bmp.set(127, 192);
 
 	std::vector<ClusterRun> decoded;
 	for (auto& run : BitmapSpans(&bmp))
@@ -79,6 +71,111 @@ TEST_CASE("Bitmap to spans", "[Bitmap]") {
 	for (size_t i = 0; i < decoded.size(); i++)
 		CHECK(src[i] == decoded[i]);
 }
+
+TEST_CASE("Bitmap to spans", "[Bitmap]\[Spans]") {
+	BitmapBuf bmp;
+	bmp.resize(4096);
+
+	//Empty bitmap should have no spans
+	for (auto& run : BitmapSpans(&bmp))
+		CHECK(false);
+
+	//Span at the start
+	bmp.clear_all();
+	bmp.set(0, 1000);
+	for (auto& run : BitmapSpans(&bmp)) {
+		CHECK(run.offset == 0);
+		CHECK(run.length == 1001);
+	}
+
+	//Span in the middle
+	bmp.clear_all();
+	bmp.set(1000, 2000);
+	for (auto& run : BitmapSpans(&bmp)) {
+		CHECK(run.offset == 1000);
+		CHECK(run.length == 1001);
+	}
+
+	//Span at the end
+	bmp.clear_all();
+	bmp.set(3095, 4095);
+	for (auto& run : BitmapSpans(&bmp)) {
+		CHECK(run.offset == 3095);
+		CHECK(run.length == 1001);
+	}
+
+
+	//From here on, we will add many test cast spans at once,
+	//decode them, reencode them and verify that the resulting set matchines
+	std::vector<ClusterRun> src;
+
+	//A bunch of random spans to warm up
+	src.emplace_back(5, 5);
+	src.emplace_back(15, 5);
+	src.emplace_back(64, 1);
+	src.emplace_back(127, 65);
+	bmpEncodeDecode(bmp, src);
+
+
+	//The main set
+	//Blocks are 64 bit
+	//Tests are spaced 128 bits apart so that there's an empty block between each two
+	src.clear();
+
+	//Single-block spans
+	src.emplace_back(256, 28);	//256: Beginning of the block
+	src.emplace_back(419, 28);	//384: End of the block
+	src.emplace_back(524, 28);	//512: Middle of the block
+	src.emplace_back(628, 28);	//640: Cross the block border
+
+	src.emplace_back(768, 1);	//768: Single bit at the beginning
+	src.emplace_back(959, 1);	//896: Single bit at the end
+	src.emplace_back(1035, 1);	//1024: Single bit in the middle
+
+	src.emplace_back(1151, 66);	//1152: Bridge one full block (. ..... .)
+
+	bmpEncodeDecode(bmp, src);
+
+
+	//Some more special cases on the buffer borders
+	
+	//start_10 and end_01
+	src.clear();
+	src.emplace_back(0, 1);
+	src.emplace_back(4095, 1);
+	bmpEncodeDecode(bmp, src);
+
+	//start_010 and end_010
+	src.clear();
+	src.emplace_back(1, 1);
+	src.emplace_back(4094, 1);
+	bmpEncodeDecode(bmp, src);
+
+	//Same, but the final bits are not on the block boundary
+	bmp.resize(4107);
+
+	src.clear();
+	src.emplace_back(4106, 1);
+	bmpEncodeDecode(bmp, src);
+
+	src.clear();
+	src.emplace_back(4105, 1);
+	bmpEncodeDecode(bmp, src);
+
+	//Failing case from the app:
+	//Final span ends on ONE BIT LESS than a block. Accidentally, the remaining bit is also set.
+	bmp.resize(255);
+	bmp.buffer[23] = 0xFF; //Needs at least some prefix before the full block
+	*((uint64_t*)&bmp.buffer[24]) = ~0ULL; //Set all bits, even the remaining one at the end
+	for (auto& run : BitmapSpans(&bmp)) {
+		CHECK(run.offset == 184);
+		CHECK(run.length == 71);
+	}
+}
+
+
+
+
 
 TEST_CASE("Bitmap mass ops", "[Bitmap]") {
 	BitmapBuf bmp1;
