@@ -335,7 +335,7 @@ void BitmapSpans::Iterator::skip0s() {
 	//Next go full words
 	current.offset++;
 	ptr++;
-	while ((size_t)current.offset < size && *ptr == 0) {
+	while ((size_t)current.offset + BLOCK_BITS < size && *ptr == 0) {
 		ptr++;
 		current.offset += BLOCK_BITS;
 	};
@@ -376,7 +376,7 @@ void BitmapSpans::Iterator::eat1s() {
 	//Next go full words
 	current.length++;
 	ptr++;
-	while (current.length < remainingSize && *ptr == static_cast<uint64_t>(-1)) {
+	while (current.length + BLOCK_BITS < remainingSize && *ptr == static_cast<uint64_t>(-1)) {
 		ptr++;
 		current.length += BLOCK_BITS;
 	};
