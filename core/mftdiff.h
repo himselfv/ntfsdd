@@ -118,6 +118,7 @@ struct DiffStats {
 	SegmentNumber dirtyBecauseOfUsnOnly = 0; //Segments marked dirty because ONLY their USN has changed
 	SegmentNumber dirtyBecauseOfIndex = 0; //Segments marked dirty because of a "mark all indexes dirty" rule
 	SegmentNumber dirtyBecauseOfParent = 0; //Segments marked dirty because their parent is "mark children dirty".
+	SegmentNumber diffUsnOnly = 0; //Segments where ONLY their USN has changed, even if we haven't been instructed to mark them dirty.
 	void print(int BytesPerCluster);
 };
 

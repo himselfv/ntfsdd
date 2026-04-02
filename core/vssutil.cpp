@@ -106,6 +106,8 @@ void VssShadowCopy::release() {
 		this->m_haveSnapshotId = false;
 	}
 
-	m_pBackup->Release();
-	m_pBackup = nullptr;
+	if (m_pBackup) {
+		m_pBackup->Release();
+		m_pBackup = nullptr;
+	}
 }

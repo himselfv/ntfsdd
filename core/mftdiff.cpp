@@ -49,6 +49,7 @@ void DiffStats::print(int BytesPerCluster)
 {
 	qInfo() << "Segments: dirty=" << dirtySegments;
 	qVerbose() << " bc: diff=" << dirtyBecauseOfCmp << ", usn=" << dirtyBecauseOfUsnOnly << ", index=" << dirtyBecauseOfIndex << ", parent=" << dirtyBecauseOfParent;
+	qVerbose() << "; usn_diff=" << diffUsnOnly;
 	qInfo() << std::endl;
 	if (filesSkipped != 0 || clustersSkipped != 0)
 		qInfo() << "Skipped: files=" << filesSkipped << ", clusters=" << clustersSkipped
@@ -386,9 +387,12 @@ void MftDiff::processValidSegment()
 		if (dirty)
 			diffStats.dirtyBecauseOfCmp++;
 		
-		if (*srcUsnAddr != destUsnOrig && !dirty && !this->ignoreUsnChanges) {
-			dirty = true;
-			diffStats.dirtyBecauseOfUsnOnly++;
+		if (*srcUsnAddr != destUsnOrig && !dirty) {
+			if (!this->ignoreUsnChanges) {
+				dirty = true;
+				diffStats.dirtyBecauseOfUsnOnly++;
+			}
+			diffStats.diffUsnOnly++;
 		}
 	} else
 		dirty = true;

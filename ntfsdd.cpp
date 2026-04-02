@@ -883,8 +883,13 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		diffClusterCount = ((ClusterDiffComparer&)(*clproc)).stats.clustersDiffCount;
 		qInfo() << "Diff clusters: " << diffClusterCount << ", size: " << dataSizeToStr(diffClusterCount*src.volumeData().BytesPerCluster) << std::endl;
 	}
+	if (action == DdAction::Copy) {
+		qInfo() << "Clusters written: " << srcUnits.clusters(selectedClusterCount) << std::endl;
+	}
+	if (action == DdAction::Rcw) {
+		qInfo() << "Clusters written: " << srcUnits.clusters(diffClusterCount) << std::endl;
+	}
 	clproc.reset();
-
 
 
 	//Dirty clusters after comparison

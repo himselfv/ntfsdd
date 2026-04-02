@@ -14,7 +14,7 @@ VolumeLock::VolumeLock(Volume& volume, bool ignoreErrors)
 		qWarning() << "Cannot lock volume. Error " << GetLastError() << "." << std::endl;
 	}
 	else {
-		qVerbose() << "Volume locked." << std::endl;
+		qDebug() << "Volume locked." << std::endl;
 	}
 }
 
@@ -25,7 +25,7 @@ VolumeLock::~VolumeLock()
 		if (!this->volume->ioctl(FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL))
 			qWarning() << "WARNING: Cannot unlock volume. Error " << GetLastError() << "." << std::endl; //But ignore
 		else
-			qVerbose() << "Volume unlocked." << std::endl;
+			qDebug() << "Volume unlocked." << std::endl;
 		this->volume = nullptr;
 	}
 }
