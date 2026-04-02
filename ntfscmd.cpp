@@ -80,15 +80,56 @@ std::string attrTypeToStr(ATTRIBUTE_TYPE_CODE type)
 	}
 }
 
+std::string fileAttributesToString(ULONG attrs)
+{
+	std::string result {};
+	if (attrs & FAT_DIRENT_ATTR_READ_ONLY) result += "READ_ONLY ";
+	if (attrs & FAT_DIRENT_ATTR_HIDDEN) result += "HIDDEN ";
+	if (attrs & FAT_DIRENT_ATTR_SYSTEM) result += "SYSTEM ";
+	if (attrs & FAT_DIRENT_ATTR_VOLUME_ID) result += "VOLUME_ID ";
+	if (attrs & FAT_DIRENT_ATTR_ARCHIVE) result += "ARCHIVE ";
+	if (attrs & FAT_DIRENT_ATTR_DEVICE) result += "DEVICE ";
+	return result;
+}
+
 void printFilenameAttr(ATTRIBUTE_RECORD_HEADER& attr)
 {
 	AttrFilename fn{ &attr };
-	std::cout << "  FILE_NAME: " << AttrFilename(&attr).name() << std::endl;
+	std::cout << "  Filename: " << AttrFilename(&attr).name() << std::endl;
 	std::cout << "  Parent dir: " << segmentRefToStr(fn.fn->ParentDirectory) << std::endl;
 	std::cout << "  Flags: " << (USHORT)(fn.fn->Flags);
 	if (fn.fn->Flags & FILE_NAME_NTFS) std::cout << " NTFS";
 	if (fn.fn->Flags & FILE_NAME_DOS) std::cout << " DOS";
 	std::cout << std::endl;
+}
+
+void printStandardInformationAttr(ATTRIBUTE_RECORD_HEADER& attr)
+{
+	int64_t size = attr.Form.Resident.ValueLength;
+	auto& sa = *((STANDARD_INFORMATION*)attr.ResidentValuePtr());
+
+	std::cout << "  Creation: " << sa.CreationTime;
+	std::cout << " LastMod: " << sa.LastModificationTime;
+	std::cout << " LastChange: " << sa.LastChangeTime;
+	std::cout << " LastAcc: " << sa.LastAccessTime;
+	std::cout << std::endl;
+
+	std::cout << "  FileAttrs: " << fileAttributesToString(sa.FileAttributes) << std::endl;
+	std::cout << "  MaximumVersions: " << sa.MaximumVersions;
+	std::cout << " VersionNumber: " << sa.VersionNumber << std::endl;
+
+	if (size >= offsetof(STANDARD_INFORMATION, SecurityId) + sizeof(STANDARD_INFORMATION::SecurityId)) {
+		std::cout << "  ClassId: " << sa.ClassId
+			<< " OwnerId: " << sa.OwnerId
+			<< " SecurityId: " << sa.SecurityId
+			<< std::endl;
+	}
+	if (size >= offsetof(STANDARD_INFORMATION, QuotaCharged) + sizeof(STANDARD_INFORMATION::QuotaCharged)) {
+		std::cout << "  QuotaCharged: " << sa.QuotaCharged << std::endl;
+	}
+	if (size >= offsetof(STANDARD_INFORMATION, Usn) + sizeof(STANDARD_INFORMATION::Usn)) {
+		std::cout << "  Usn: " << sa.Usn << std::endl;
+	}
 }
 
 void printAttr(ATTRIBUTE_RECORD_HEADER& attr)
@@ -105,6 +146,8 @@ void printAttr(ATTRIBUTE_RECORD_HEADER& attr)
 		//Dump extended info on some attributes
 		if (attr.TypeCode == $FILE_NAME)
 			printFilenameAttr(attr);
+		if (attr.TypeCode == $STANDARD_INFORMATION)
+			printStandardInformationAttr(attr);
 	}
 	else if (attr.FormCode == NONRESIDENT_FORM) {
 		std::cout << "  Non-resident: VCN=" << attr.Form.Nonresident.LowestVcn << "-" << attr.Form.Nonresident.HighestVcn << std::endl;
