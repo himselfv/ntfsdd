@@ -232,7 +232,7 @@ void DirEntryLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
 		this->processIndexRoot(attr.ResidentValuePtr(), attr.Form.Resident.ValueLength);
 	}
 	if (attr.TypeCode == $INDEX_ALLOCATION && attrName == "$I30") {
-		this->addAttrChunk(&attr);
+ 		this->addAttrChunk(&attr);
 	}
 	//Do not do advance() here as very often we'll lack $BITMAP or $INDEX_ROOT and simply read out all available data, blowing up the buffers.
 	//Do it after the complete segment load.

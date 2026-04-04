@@ -96,7 +96,7 @@ BOOL Volume::setFilePointer(
 )
 {
 	this->m_overlapped.Offset = (uint32_t)liDistanceToMove;
-	this->m_overlapped.OffsetHigh = (uint32_t)(liDistanceToMove << (sizeof(uint32_t)*8));
+	this->m_overlapped.OffsetHigh = (uint32_t)(liDistanceToMove >> (sizeof(uint32_t)*8));
 	return TRUE;
 }
 
