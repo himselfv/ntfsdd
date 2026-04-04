@@ -219,3 +219,52 @@ Compiles with MSVC2015/C++14.
 All requirements are in Requirements.example.props, rename and provide local paths.
 
 There are some tests, write more.
+
+
+
+## In-depth discussion
+
+### Is the Bitmap selection system safe?
+Bitmap selection is slow but should be 100% safe. We're comparing ALL clusters that the source file system says are in use. You really have to break NTFS fundamentally for this to be less than a full clone.
+
+
+### Is the MFT comparison system safe?
+Will it really catch everything? Can't the data change without the MFT entry changing?
+https://www.boku.ru/2026/04/02/ntfs-can-a-file-change-without-its-mft-record-also-changing/
+
+MFT comparison is a bit of a gamble. For normal files and normal cases MFT checks are safe with very solid safety margins. There does not seem to be a mode where you can change anything substantial without the corresponding MFT entries changing with a guarantee.
+
+But there are exceptions. Driver magic. System files, cached DUPLICATED_INFORMATION in index entries. And what these exceptions tell us is that there could be *more* exceptions. We handle all the exceptions we know about and it seems to cover everything, but there's no documented promise anywhere that says "No other files will receive driver magic".
+
+What we rely on instead is:
+1. We cover most of the major exceptions.
+2. We leave the target volume in a consistent state.
+3. Any files or clusters that slip through the cracks are mishandled predictably. Their contents will be garbage/old versions, but the volume will work.
+
+To protect against this long term, do a ```compare --select antimft --exit-code``` scan from time to time to detect any slippages. Hopefully there should be none.
+
+Another way to look at this system is: When you're running rclone, it compares every file by looking at its size and modification date to decide whether it needs copying. For normal files, we're doing much, much better than that. Of course, rclone does not cover system files at all. That's where the exceptions are.
+
+
+### Eventual consistency
+NTFS delays writing out some changes to the volume, from milliseconds for normal data to hours for LastAccessTime/LastModificationTime according to some reports. Is this not a problem for our algorithms? How consistent will be a clone made from a live system?
+
+Here's what you should understand:
+1. You can pull the power plug at any moment. Anything not yet written to the disk will be lost. What you get is called *crash consistency*. NTFS is designed to be crash consistent. On the next boot it will perform some automatic transparent recovery actions and the volume will continue working.
+2. Crash consistency only means that the volume itself remains healthy. The data that has not yet been written to disk at the moment of the crash will be lost. Some apps, like NTFS, are prepared for this and will continue working. Others may be so unprepared that their data becomes broken.
+3. If you copy a raw LIVE volume WITHOUT VSS, you get INCONSISTENCY. As you're copying the sectors, other sectors change and so your copy will be self-contradictory. Thankfully, the OS will usually not let you do that.
+4. LOCKED volume should be NTFS-crash-consistent. If you managed to lock the volume, NTFS will not touch it until you release it. You get the same guarantees as with pulling the power plug (maybe even a bit better). The running apps may still be in the process of updating their files, and the copy you make will be inconsistent from their point of view. But it will work.
+5. VSS snapshot (--shadow) instantly creates a "copy" of the volume which is crash consistent. It's the same as locking, only you can use the snapshot long-term. It's your individual plaything, while the world goes on, modifying the real volume. You won't see those modifications. Still, it's only crash consistent.
+6. VSS with writers (--shadow --writers) additionally coordinates many system services by asking them to prepare for backup: finish any operations and write any cached data. This lowers the chance that the snapshot will have broken data for those services. This does not cover all the apps in the system, and the ones it covers are normally pretty resilient anyway.
+
+The recommended way of running this on live systems is ``--shadow`` or ``--shadow --writers``. Therefore any time you're updating the clone you get crash consistency: more or less no worse than what you'd get if you pulled the plug at that moment. This is pretty much normal for live backups. Try to run updates at a time when there's minimal system activity to minimize the number of apps that can be affected.
+
+Crash consistency + VSS snapshot guarantee that the NTFS volume state will be low-level consistent. $Bitmap will correctly identify clusters used, MFT segments will correctly account for all of them. We're verifying that when we're doing the clone.
+
+VSS crash consistency might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to do *something like that* (prepare for backup), but there are no literal lists of high-level guarantees about particulars of caching. So what this tool cares about is *eventual consistency*. If for some reason some less consequential changes to the MFT are not yet written out at the time of taking the snapshot, yes, with ``--select mft`` we will miss the changes in data those reflect. But we will catch them next time!
+
+This is not a problem because the precise moment when the clone runs is arbitrary anyway: it could have happened a moment earlier when those changes to the data had not yet been made, and we would have missed them too until next time. So even though the changes *had* been made and we have not seen them *yet*, what matters is every change gets caught *eventually*.
+
+Creating a shadow is supposed to trigger flushing all possible caches, including writing out any cached modtimes and segments (which can otherwise be cached in some cases for up to, sources tell, hours). There's no real guarantee this will happen.
+HOWEVER. What we care about is *eventual* consistency. Even if you miss some changes today, if you do the sync again you'll catch it later. The goal is to have no *permanently undetectable* changes. And to have no *inconsistent FS*. We guarantee FS consistency by force-comparing the MFT (which gives us power-down crash consistency, and maybe more, if VSS+writers work as intended).
+With FS-consistency, file-inconsistency, if any, will look like recently changed files having 1. Their old content (if their cached segment changes have not been written out) - their state should be consistent with the state of the rest of the volume. If any inconsistencies are present, those will get resolved in the same way as when you reboot after a sudden power-down, by using the NTFS log journal. 2. Their old content (if the content had changed, no segment changes had been needed, no size change had happened, and the lastmodtime and LSN/USN/stuff had not yet been written down to disk). 3. Purely theoretically, maybe in some cases, garbage (can't invent examples right now, but it's one of the theoretically stable states of the volume where some updates had been skipped).
