@@ -163,6 +163,7 @@
     <ClCompile Include="bitmap.cpp" />
     <ClCompile Include="clusterdiff.cpp" />
     <ClCompile Include="mftdiff.cpp" />
+    <ClCompile Include="mftdir.cpp" />
     <ClCompile Include="mftutil.cpp" />
     <ClCompile Include="ntfs.cpp" />
     <ClCompile Include="ntfsmft.cpp" />
@@ -174,6 +175,7 @@
     <ClInclude Include="bitmap.h" />
     <ClInclude Include="clusterdiff.h" />
     <ClInclude Include="mftdiff.h" />
+    <ClInclude Include="mftdir.h" />
     <ClInclude Include="mftutil.h" />
     <ClInclude Include="ntfs.h" />
     <ClInclude Include="ntfsmft.h" />

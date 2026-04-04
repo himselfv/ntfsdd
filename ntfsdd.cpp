@@ -283,7 +283,7 @@ void rebuildVolumeBitmap(Volume& vol, Mft& mft, BitmapBuf* bmp)
 	auto totalSegments = vol.volumeData().MftValidDataLength.QuadPart / vol.volumeData().BytesPerFileRecordSegment;
 	SegmentNumber idx = 0;
 	for (auto& segment : SegmentIter(&mft)) {
-		if (!mft.isValidSegment(&segment)) continue;
+		if (!mft.IsValidSegment(&segment)) continue;
 		if ((segment.Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;
 		for (auto& attr : AttributeIterator(&segment)) {
 			if (attr.FormCode != NONRESIDENT_FORM) continue;

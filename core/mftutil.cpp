@@ -37,9 +37,3 @@ std::string readChars(wchar_t* first, size_t len)
 	//Sic! wcharToUtf8 wants one char after the last one
 	return wcharToUtf8(first, first+len);
 }
-
-AttrFilename::AttrFilename(ATTRIBUTE_RECORD_HEADER* attr)
-{
-	assert(attr->FormCode != NONRESIDENT_FORM);
-	fn = (FILE_NAME*)((char*)attr + attr->Form.Resident.ValueOffset);
-}

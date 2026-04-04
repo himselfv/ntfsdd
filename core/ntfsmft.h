@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <unordered_set>
+#include <unordered_map>
 #include <windows.h>
 #include "ntfs.h"
 #include "util.h"
@@ -52,11 +53,24 @@ public:
 	NonResidentData(Volume* vol);
 	inline const std::vector<VcnMapEntry>& vcnMap() { return this->m_vcnMap; }
 	LCN getLcn(VCN vcn);
-	//Некоторые файлы могут быть sparse, но иногда хочется проверить, что дыр нет.
+	//Some files can be sparse but sometimes we legit need to check there are no holes:
 	VCN getFirstMissingVcn();
 	void addAttrChunk(ATTRIBUTE_RECORD_HEADER* attr);
-	inline int64_t sizeInBytes() { return this->dataHeader.Form.Nonresident.FileSize; }
-	inline int64_t sizeInClusterMultiples() { return this->dataHeader.Form.Nonresident.AllocatedLength; }
+	//Even though this is called NonResidentData, descendants use us for all sorts of things so let's try to be compatible.
+	inline int64_t sizeInBytes() {
+		if (this->dataHeader.FormCode == RESIDENT_FORM)
+			return this->dataHeader.Form.Resident.ValueLength;
+		return this->dataHeader.Form.Nonresident.FileSize;
+	}
+	inline int64_t sizeInClusterMultiples() {
+		if (this->dataHeader.FormCode == RESIDENT_FORM) {
+			//Strictly speaking you don't need a cluster multiple to handle this, but since the function name promises
+			//Magic rounding up code:
+			int64_t ret = this->dataHeader.Form.Resident.ValueLength + vol->volumeData().BytesPerCluster - 1;
+			return ret - (ret % vol->volumeData().BytesPerCluster);
+		}
+		return this->dataHeader.Form.Nonresident.AllocatedLength;
+	}
 
 	//Doesn't work for files with holes.
 	//Only reads full clusters (== multiples of logical sectors). Make sure you have enough space - use sizeInClusterMultiples()!
@@ -65,10 +79,24 @@ public:
 
 
 /*
-A class to process non-resident (and resident!) attribute data sequentially, as chunks of the VCN->LCN map become available.
+A class to process non-resident (and sometimes resident!) attribute data sequentially, as chunks of the VCN->LCN map become available.
 Mostly needed for $ATTRIBUTE_LIST processing below but can be reused for anything. See comments in the CPP.
+
+Users:
+- Pass addAttr() as you encounter matching attribute chunks.
+- Call advance() after each chunk or at opportune times.
+
+Descendants:
+- Override tryReadEntry()
+- Each call, try to read a complete something from the avaiable data. Return the size read (which guarantees
+  another call to tryReadEntry), or 0 (which delays next call until more data is available).
+
+Resident attributes:
+If your tryReadEntry() does not rely on non-resident properties too much, you can call processResidentAttr() on a resident data and it will work.
+But many properties of the inherited NonResidentData will be garbage so beware.
+DO NOT call advance() in this case. This is why it's "process" and not "addResidentAttr".
 */
-class NonResidentDataProcessor : public NonResidentData {
+class AttributeCollectorProcessor : public NonResidentData {
 protected:
 	VCN m_nextVcn = 0;
 	bool m_vcnEof = false;
@@ -84,10 +112,14 @@ protected:
 	//Process another entry. Override to handle specifics.
 	virtual size_t tryReadEntry(byte* buf, size_t len) = 0;
 public:
-	NonResidentDataProcessor(Volume* vol);
+	AttributeCollectorProcessor(Volume* vol);
+
+	//Process the resident version of the attribute. Has to be the ONLY instance of this attribute.
+	//Be careful! Your tryReadMore() has to be ready for RESIDENT_FORM of the ATTRIBUTE_RECORD_HEADER dataHeader.
+	void processResidentAttr(ATTRIBUTE_RECORD_HEADER& attr);
 
 	//Process a complete independent chunk of data, usually from a resident version of the attribute.
-	//I know we're inheriting from NonResidentData, it's for simplicity.
+	//Be careful! Only works if your tryReadMore() is ATTRIBUTE_RECORD_HEADER-independent.
 	void processData(void* data, size_t len);
 
 	//When processing segments and encountering a non-resident attribute chunk, call base addDataAttr() + advance()
@@ -102,7 +134,7 @@ public:
 Processes resident and non-resident $ATTRIBUTE_LIST entries as they're passed to it,
 and accumulates information, currently just a growing list of all segments mentioned in those.
 */
-class AttributeListProcessor : public NonResidentDataProcessor {
+class AttributeListProcessor : public AttributeCollectorProcessor {
 protected:
 	//Process another $ATTRIBUTE_LIST entry if it's available. Store segments encountered.
 	virtual size_t tryReadEntry(byte* buf, size_t len) override;
@@ -110,9 +142,45 @@ public:
 	//All segments encountered in this $ATTRIBUTE_LIST so far.
 	std::vector<SegmentNumber> segments;
 
-	using NonResidentDataProcessor::NonResidentDataProcessor;
+	using AttributeCollectorProcessor::AttributeCollectorProcessor;
 };
 
+
+/*
+Base class. Receives MFT and the base segment number for a file. Loads that segment and any referenced in it sequentially.
+Processes $ATTRIBUTE_LIST automatically to retrieve additional segment numbers.
+Descendants should override processAttr() for further attribute collection and processing.
+
+Standalone usage:
+  MyFileLoader loader(vol);
+  loader.load(mft, baseSegmentNo);
+  for (auto& result : loader.results()) { ... }
+
+Single-pass MFT processing usage:
+  if (!isBaseSegmentEntry || !isInterestingFile) continue;
+  loader = this->m_loaderMap[segmentNo];
+  loader.loadSegment(segment); //no MFT needed, segment already read
+*/
+class Mft;
+class MultiSegmentFileLoader {
+protected:
+	AttributeListProcessor attrList;
+	virtual void processAttr(ATTRIBUTE_RECORD_HEADER& attr);
+public:
+	MultiSegmentFileLoader(Volume* vol);
+	virtual ~MultiSegmentFileLoader();
+	//Start with the base segment and use Mft to load all segments sequentially
+	virtual void load(Mft& mft, SegmentNumber baseSegmentNo);
+	//Load this particular segment
+	virtual void loadSegment(Mft& mft, SegmentNumber segmentNo);
+	//Load this particular segment from data
+	virtual void loadSegment(FILE_RECORD_SEGMENT_HEADER* segment);
+};
+
+
+//Applies fixups to a given number of sectors, according to the fixup table in MULTI_SECTOR_HEADER.
+//Thankfully, MULTI_SECTOR_HEADER is the first thing in all structs where it is used so we need no separate data pointer.
+void sectorsApplyFixups(MULTI_SECTOR_HEADER* data, int sectors, DWORD bytesPerSector);
 
 
 /*
@@ -120,20 +188,19 @@ public:
 1. Итерация по всем записям.
 2. Возможность вытащить запись по её VCN. Зная размер записи, мы можем расчитать LCN + отступ записи в ней.
 */
-class Mft : public NonResidentData {
+class Mft : public NonResidentData, public MultiSegmentFileLoader {
 public:
 	int32_t SectorsPerFileSegment = 0;
 	int BytesPerFileSegment = 0;
 
 protected:
-	AttributeListProcessor attrList;
+	virtual void processAttr(ATTRIBUTE_RECORD_HEADER& attr) override;
 
 public:
 	Mft(Volume* volume);
 
 	void loadMinimal();
 	void load();
-	void loadMftSegment(SegmentNumber segmentNo);
 
 	inline int64_t sizeInSegments() { return this->sizeInBytes() / this->BytesPerFileSegment; }
 
@@ -143,10 +210,9 @@ public:
 	void readSegmentsVrbn(VRBN vrbn, FILE_RECORD_SEGMENT_HEADER* segment, int count);
 	void readSegmentsNoSeek(FILE_RECORD_SEGMENT_HEADER* segment, int count, LPOVERLAPPED lpOverlapped = nullptr);
 	void processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count, int* validCount = nullptr);
-	static bool IsValidSegment(FILE_RECORD_SEGMENT_HEADER* segment);
 	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* segment);
 
-	inline bool isValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
+	inline static bool IsValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
 		return (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE")); };
 };
 
@@ -160,6 +226,11 @@ public:
 	Bitmap asBitmap() { return Bitmap(buf->Buffer, buf->BitmapSize.QuadPart); }
 };
 
+
+
+/*
+Segment iterators.
+*/
 
 #define SEGMENTITERATOR_BATCHSIZE 16
 //Read data in batches. Hugely speeds up processing.
@@ -293,4 +364,3 @@ public:
 	inline SegmentIterator begin() { return{ mft, flags }; }
 	inline SegmentIterator end() { return{ nullptr }; }
 };
-

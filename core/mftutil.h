@@ -131,20 +131,3 @@ std::string readChars(wchar_t* first, size_t len);
 inline std::string attrNameStr(ATTRIBUTE_RECORD_HEADER* attr) {
 	return readChars((wchar_t*)((char*)attr + attr->NameOffset), attr->NameLength);
 }
-
-struct AttrFilename {
-public:
-	FILE_NAME* fn = nullptr;
-	AttrFilename(ATTRIBUTE_RECORD_HEADER* attr);
-
-	inline std::string name()
-	{
-		//Sic! wcharToUtf8 wants one char after the last one
-		return wcharToUtf8(fn->FileName, fn->FileName + fn->FileNameLength);
-	}
-
-	inline operator std::string()
-	{
-		return this->name();
-	}
-};

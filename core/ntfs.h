@@ -7,6 +7,9 @@ typedef LONGLONG LCN;
 typedef LONGLONG SegmentNumber;
 typedef ULONGLONG LSN, *PLSN;
 
+typedef ULONG COLLATION_RULE;
+typedef ULONG DISPLAY_RULE;
+
 
 //http://ntfs.com/ntfs-partition-boot-sector.htm
 //https://kcall.co.uk/ntfs/
@@ -69,12 +72,22 @@ typedef struct _MFT_SEGMENT_REFERENCE {
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/mft-segment-reference
 typedef MFT_SEGMENT_REFERENCE FILE_REFERENCE, *PFILE_REFERENCE;
 
+
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/multi-sector-header
 typedef struct _MULTI_SECTOR_HEADER {
   UCHAR  Signature[4];
   USHORT UpdateSequenceArrayOffset;
   USHORT UpdateSequenceArraySize;
 } MULTI_SECTOR_HEADER, *PMULTI_SECTOR_HEADER;
+
+static const UCHAR SIGNATURE_FILE[4] = { 'F', 'I', 'L', 'E' };
+static const UCHAR SIGNATURE_INDX[4] = { 'I', 'N', 'D', 'X' };
+
+
+
+typedef USHORT UPDATE_SEQUENCE_NUMBER, *PUPDATE_SEQUENCE_NUMBER;
+typedef UPDATE_SEQUENCE_NUMBER UPDATE_SEQUENCE_ARRAY[1];
+
 
 //https://learn.microsoft.com/en-us/windows/win32/devnotes/file-record-segment-header
 //This structure definition is valid only for major version 3 and minor version 0 or 1, as reported by FSCTL_GET_NTFS_VOLUME_DATA.
@@ -227,94 +240,57 @@ typedef struct _ATTRIBUTE_RECORD_HEADER {
 //  Standard Information Attribute.  This attribute is present in
 //  every base file record, and must be resident.
 //
-
 typedef struct _STANDARD_INFORMATION {
 
-    //
     //  File creation time.
-    //
-
     LONGLONG CreationTime;                                          //  offset = 0x000
 
-    //
     //  Last time the DATA attribute was modified.
-    //
-
     LONGLONG LastModificationTime;                                  //  offset = 0x008
 
-    //
     //  Last time any attribute was modified.
-    //
-
     LONGLONG LastChangeTime;                                        //  offset = 0x010
 
-    //
     //  Last time the file was accessed.  This field may not always
     //  be updated (write-protected media), and even when it is
     //  updated, it may only be updated if the time would change by
     //  a certain delta.  It is meant to tell someone approximately
     //  when the file was last accessed, for purposes of possible
     //  file migration.
-    //
-
     LONGLONG LastAccessTime;                                        //  offset = 0x018
 
-    //
     //  File attributes.  The first byte is the standard "Fat"
     //  flags for this file.
-    //
-
     ULONG FileAttributes;                                           //  offset = 0x020
 
-    //
     //  Maximum file versions allowed for this file.  If this field
     //  is 0, then versioning is not enabled for this file.  If
     //  there are multiple files with the same version, then the
     //  value of Maximum file versions in the file with the highest
     //  version is the correct one.
-    //
-
     ULONG MaximumVersions;                                          //  offset = 0x024
 
-    //
     //  Version number for this file.
-    //
-
     ULONG VersionNumber;                                            //  offset = 0x028
 
 //#ifdef _CAIRO_
 
-    //
     //  Class Id from the bidirectional Class Id index
-    //
-
     ULONG ClassId;                                                  //  offset = 0x02c
 
-    //
     //  Id for file owner, from bidir security index
-    //
-
     ULONG OwnerId;                                                  //  offset = 0x030
 
-    //
     //  SecurityId for the file - translates via bidir index to
     //  granted access Acl.
-    //
-
     ULONG SecurityId;                                               //  offset = 0x034
 
-    //
     //  Current amount of quota that has been charged for all the
     //  streams of this file.  Changed in same transaction with the
     //  quota file itself.
-    //
-
     ULONGLONG QuotaCharged;                                         //  offset = 0x038
 
-    //
     //  Update sequence number for this file.
-    //
-
     ULONGLONG Usn;                                                  //  offset = 0x040
 
 //#else _CAIRO_
@@ -394,67 +370,40 @@ typedef ATTRIBUTE_LIST_ENTRY *PATTRIBUTE_LIST_ENTRY;
 
 typedef struct _DUPLICATED_INFORMATION {
 
-	//
 	//  File creation time.
-	//
-
 	LONGLONG CreationTime;                                          //  offset = 0x000
 
-	//
 	//  Last time the DATA attribute was modified.
-	//
-
 	LONGLONG LastModificationTime;                                  //  offset = 0x008
 
-	//
 	//  Last time any attribute was modified.
-	//
-
 	LONGLONG LastChangeTime;                                        //  offset = 0x010
 
-	//
 	//  Last time the file was accessed.  This field may not always
 	//  be updated (write-protected media), and even when it is
 	//  updated, it may only be updated if the time would change by
 	//  a certain delta.  It is meant to tell someone approximately
 	//  when the file was last accessed, for purposes of possible
 	//  file migration.
-	//
-
 	LONGLONG LastAccessTime;                                        //  offset = 0x018
 
-	//
 	//  Allocated Length of the file in bytes.  This is obviously
 	//  an even multiple of the cluster size.  (Not present if
 	//  LowestVcn != 0.)
-	//
-
 	LONGLONG AllocatedLength;                                       //  offset = 0x020
 
-	//
 	//  File Size in bytes (highest byte which may be read + 1).
 	//  (Not present if LowestVcn != 0.)
-	//
-
 	LONGLONG FileSize;                                              //  offset = 0x028
 
-	//
 	//  File attributes.  The first byte is the standard "Fat"
 	//  flags for this file.
-	//
-
 	ULONG FileAttributes;                                           //  offset = 0x030
 
-	//
 	//  The size of buffer needed to pack these Ea's
-	//
-
 	USHORT PackedEaSize;                                            //  offset = 0x034
 
-	//
 	//  Reserved for quad word alignment
-	//
-
 	USHORT Reserved;                                                //  offset = 0x036
 
 } DUPLICATED_INFORMATION;                                           //  sizeof = 0x038
@@ -464,12 +413,9 @@ typedef DUPLICATED_INFORMATION *PDUPLICATED_INFORMATION;
 //  File Name attribute.  A file has one File Name attribute for
 //  every directory it is entered into (hard links).
 //
-
 typedef struct _FILE_NAME {
-	//
 	//  This is a File Reference to the directory file which indexes
 	//  to this name.
-	//
 	FILE_REFERENCE ParentDirectory;                                 //  offset = 0x000
 	DUPLICATED_INFORMATION Info;                                    //  offset = 0x008
 
@@ -488,20 +434,17 @@ typedef FILE_NAME *PFILE_NAME;
 //
 //  File Name flags
 //
-
 #define FILE_NAME_NTFS                   (0x01)
 #define FILE_NAME_DOS                    (0x02)
 
 //
 //  The maximum file name length is 255 (in chars)
 //
-
 #define NTFS_MAX_FILE_NAME_LENGTH       (255)
 
 //
 //  The maximum number of links on a file is 1024
 //
-
 #define NTFS_MAX_LINK_COUNT             (1024)
 
 //
@@ -511,7 +454,6 @@ typedef FILE_NAME *PFILE_NAME;
 //  the collating routine that it should not match file names that
 //  only have the FILE_NAME_DOS bit set.
 //
-
 #define FILE_NAME_IGNORE_DOS_ONLY        (0x80)
 
 #define NtfsFileNameSizeFromLength(LEN) (                   \
@@ -534,3 +476,169 @@ typedef VOLUME_INFORMATION *PVOLUME_INFORMATION;
 
 #define VOLUME_DIRTY                     (0x0001)
 #define VOLUME_RESIZE_LOG_FILE           (0x0002)
+
+
+//
+//  Common Index Header for Index Root and Index Allocation Buffers.
+//  This structure is used to locate the Index Entries and describe
+//  the free space in either of the two structures above.
+//
+typedef struct _INDEX_HEADER {
+
+    //  Offset from the start of this structure to the first Index
+    //  Entry.
+    ULONG FirstIndexEntry;                                          //  offset = 0x000
+
+    //  Offset from the start of the first index entry to the first
+    //  (quad-word aligned) free byte.
+    ULONG FirstFreeByte;                                            //  offset = 0x004
+
+    //  Total number of bytes available, from the start of the first
+    //  index entry.  In the Index Root, this number must always be
+    //  equal to FirstFreeByte, as the total attribute record will
+    //  be grown and shrunk as required.
+    ULONG BytesAvailable;                                           //  offset = 0x008
+
+    //  INDEX_xxx flags.
+    UCHAR Flags;                                                    //  offset = 0x00C
+
+    //  Reserved to round up to quad word boundary.
+    UCHAR Reserved[3];                                              //  offset = 0x00D
+
+} INDEX_HEADER;                                                     //  sizeof = 0x010
+typedef INDEX_HEADER *PINDEX_HEADER;
+
+
+//
+//  INDEX_xxx flags
+//
+
+//  This Index or Index Allocation buffer is an intermediate node,
+//  as opposed to a leaf in the Btree.  All Index Entries will have
+//  a block down pointer.
+#define INDEX_NODE                       (0x01)
+
+
+//
+//  Index Root attribute.  The index attribute consists of an index
+//  header record followed by one or more index entries.
+//
+typedef struct _INDEX_ROOT {
+
+    //  Attribute Type Code of the attribute being indexed.
+    ATTRIBUTE_TYPE_CODE IndexedAttributeType;                       //  offset = 0x000
+
+    //  Collation rule for this index.
+    COLLATION_RULE CollationRule;                                   //  offset = 0x004
+
+    //  Size of Index Allocation Buffer in bytes.
+    ULONG BytesPerIndexBuffer;                                      //  offset = 0x008
+
+    //  Size of Index Allocation Buffers in units of blocks.
+    //  Blocks will be clusters when index buffer is equal or
+    //  larger than clusters and log blocks for large
+    //  cluster systems.
+    UCHAR BlocksPerIndexBuffer;                                     //  offset = 0x00C
+
+    //  Reserved to round to quad word boundary.
+    UCHAR Reserved[3];                                              //  offset = 0x00D
+
+    //  Index Header to describe the Index Entries which follow
+    INDEX_HEADER IndexHeader;                                       //  offset = 0x010
+
+} INDEX_ROOT;                                                       //  sizeof = 0x020
+typedef INDEX_ROOT *PINDEX_ROOT;
+
+
+//
+//  Index Allocation record is used for non-root clusters of the
+//  b-tree.  Each non root cluster is contained in the data part of
+//  the index allocation attribute.  Each cluster starts with an
+//  index allocation list header and is followed by one or more
+//  index entries.
+//
+typedef struct _INDEX_ALLOCATION_BUFFER {
+
+    //  Multi-Sector Header as defined by the Cache Manager.  This
+    //  structure will always contain the signature "INDX" and a
+    //  description of the location and size of the Update Sequence
+    //  Array.
+    MULTI_SECTOR_HEADER MultiSectorHeader;                          //  offset = 0x000
+
+    //  Log File Sequence Number of last logged update to this Index
+    //  Allocation Buffer.
+    LSN Lsn;                                                        //  offset = 0x008
+
+    //  We store the index block of this Index Allocation buffer for
+    //  convenience and possible consistency checking.
+    VCN ThisBlock;                                                  //  offset = 0x010
+
+    //  Index Header to describe the Index Entries which follow
+    INDEX_HEADER IndexHeader;                                       //  offset = 0x018
+
+    //  Update Sequence Array to protect multi-sector transfers of
+    //  the Index Allocation Buffer.
+    UPDATE_SEQUENCE_ARRAY UpdateSequenceArray;                      //  offset = 0x028
+
+} INDEX_ALLOCATION_BUFFER;
+typedef INDEX_ALLOCATION_BUFFER *PINDEX_ALLOCATION_BUFFER;
+
+//
+//  Default size of index buffer and index blocks.
+//
+#define DEFAULT_INDEX_BLOCK_SIZE        (0x200)
+#define DEFAULT_INDEX_BLOCK_BYTE_SHIFT  (9)
+
+//
+//  Index Entry.  This structure is common to both the resident
+//  index list attribute and the Index Allocation records
+//
+typedef struct _INDEX_ENTRY {
+
+    //  Define a union to distinguish directory indices from view indices
+    union {
+
+        //  Reference to file containing the attribute with this
+        //  attribute value.
+        FILE_REFERENCE FileReference;                               //  offset = 0x000
+
+        //  For views, describe the Data Offset and Length in bytes
+        struct {
+            USHORT DataOffset;                                      //  offset = 0x000
+            USHORT DataLength;                                      //  offset = 0x001
+            ULONG ReservedForZero;                                  //  offset = 0x002
+        };
+    };
+
+    //  Length of this index entry, in bytes.
+    USHORT Length;                                                  //  offset = 0x008
+
+    //  Length of attribute value, in bytes.  The attribute value
+    //  immediately follows this record.
+    USHORT AttributeLength;                                         //  offset = 0x00A
+
+    //  INDEX_ENTRY_xxx Flags.
+    USHORT Flags;                                                   //  offset = 0x00C
+
+    //  Reserved to round to quad-word boundary.
+    USHORT Reserved;                                                //  offset = 0x00E
+
+    //  If this Index Entry is an intermediate node in the tree, as
+    //  determined by the INDEX_xxx flags, then a VCN  is stored at
+    //  the end of this entry at Length - sizeof(VCN).
+	FILE_NAME FileName;
+
+} INDEX_ENTRY;                                                      //  sizeof = 0x010
+typedef INDEX_ENTRY *PINDEX_ENTRY;
+
+//
+//  INDEX_ENTRY_xxx flags
+//
+
+//  This entry is currently in the intermediate node form, i.e., it
+//  has a Vcn at the end.
+#define INDEX_ENTRY_NODE                 (0x0001)
+
+//  This entry is the special END record for the Index or Index
+//  Allocation buffer.
+#define INDEX_ENTRY_END                  (0x0002)

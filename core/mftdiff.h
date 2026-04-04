@@ -9,6 +9,7 @@ to be checked for differences.
 #include <unordered_set>
 #include "bitmap.h"
 #include "ntfsmft.h"
+#include "mftdir.h"
 #include "mftutil.h"
 
 
@@ -38,20 +39,6 @@ struct FileEntry {
 };
 //MftFilemap is a map because we often need just a bunch of entries
 typedef std::unordered_map<SegmentNumber, FileEntry> MftFilemap;
-
-struct FilenameEntry {
-	std::string filename;
-	SegmentNumber parentDir = -1;
-	bool filenameNtfs = false;
-};
-
-//FilenameMap is a vector bc when we build it, we need all of the names (all of the used segments; large share of all).
-class FilenameMap : public std::vector<FilenameEntry>
-{
-public:
-	void process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr);
-	std::string getFullPath(SegmentNumber segmentNo);
-};
 
 
 /*

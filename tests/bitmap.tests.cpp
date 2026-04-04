@@ -72,7 +72,7 @@ void bmpEncodeDecode(BitmapBuf& bmp, const std::vector<ClusterRun>& src)
 		CHECK(src[i] == decoded[i]);
 }
 
-TEST_CASE("Bitmap to spans", "[Bitmap]\[Spans]") {
+TEST_CASE("Bitmap to spans", "[Bitmap]\\[Spans]") {
 	BitmapBuf bmp;
 	bmp.resize(4096);
 

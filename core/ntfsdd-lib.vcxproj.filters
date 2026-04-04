@@ -42,6 +42,9 @@
     <ClCompile Include="vssutil.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="mftdir.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="bitmap.h">
@@ -69,6 +72,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="vssutil.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="mftdir.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

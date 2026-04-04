@@ -6,37 +6,6 @@
 //#define MFTDIFF_EXTRA_CHECKS
 //For when you're looking for the impossible
 
-void FilenameMap::process(SegmentNumber segmentNo, ATTRIBUTE_RECORD_HEADER& attr) {
-	auto& entry = (*this)[segmentNo];
-	assert(attr.FormCode != NONRESIDENT_FORM);
-	FILE_NAME* fndata = (FILE_NAME*)((char*)&attr + attr.Form.Resident.ValueOffset);
-	if (fndata->Flags & FILE_NAME_NTFS || !entry.filenameNtfs) {
-		entry.filename = wcharToUtf8(fndata->FileName, fndata->FileName+fndata->FileNameLength);
-		if (fndata->Flags & FILE_NAME_NTFS) entry.filenameNtfs = true;
-	}
-	if (entry.parentDir == -1 && fndata->ParentDirectory.mergedValue != 0)
-		entry.parentDir = fndata->ParentDirectory.segmentNumber();
-}
-
-std::string FilenameMap::getFullPath(SegmentNumber segmentNo)
-{
-	std::string result {};
-	while (segmentNo >= 0) {
-		auto& entry = (*this)[segmentNo];
-		std::string filename {};
-		if (entry.filename.empty())
-			filename = std::string{ "#" } +std::to_string(segmentNo);
-		else
-			filename = entry.filename;
-		result = filename + (!result.empty() ? std::string{ "\\" } +result : std::string{});
-		if (entry.parentDir == segmentNo) //Root dir does this
-			segmentNo = -1;
-		else
-			segmentNo = entry.parentDir;
-	}
-	return result;
-}
-
 
 void ScanStats::print(int BytesPerCluster)
 {
@@ -119,7 +88,7 @@ void MftScan::scan()
 		//handled by a single trimming of all unused clusters from the bitmaps comparison.
 		//Or better yet, left to occasional defrag /Retrim.
 		//Clusters of the MFT itself *will* be copied - the $MFT entry governs them. So the list of the used clusters *will* be up to date.
-		if (!mftSrc.isValidSegment(&*srcIt)) {
+		if (!mftSrc.IsValidSegment(&*srcIt)) {
 			continue;
 		}
 		if ((srcIt->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0) continue;

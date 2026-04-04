@@ -7,6 +7,7 @@
 #include "vssutil.h"
 #include "ntfsvolume.h"
 #include "ntfsmft.h"
+#include "mftdir.h"
 #include "mftutil.h"
 #include "bitmap.h"
 /*

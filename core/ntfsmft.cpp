@@ -81,14 +81,14 @@ This class handles that:
   proc->addAttrChunk(attr); //Add attribute chunks as you encounter them
   proc->advance(); //Immediately try to process more data
 */
-NonResidentDataProcessor::NonResidentDataProcessor(Volume* vol)
+AttributeCollectorProcessor::AttributeCollectorProcessor(Volume* vol)
 	: NonResidentData(vol)
 {
 	m_buf.reserve(vol->volumeData().BytesPerCluster * 2);
 	m_pos = m_buf.data();
 }
 
-void NonResidentDataProcessor::packBuffer()
+void AttributeCollectorProcessor::packBuffer()
 {
 	size_t rem = m_buf.size() - (m_pos - m_buf.data());
 	memcpy(m_buf.data(), m_pos, rem);
@@ -96,9 +96,20 @@ void NonResidentDataProcessor::packBuffer()
 	m_pos = m_buf.data();
 }
 
-void NonResidentDataProcessor::processData(void* data, size_t len)
+//Processes a complete resident instance of the attribute. Has to be the only instance of it.
+//Do not call advance() after calling this. This circumvents step-by-step logic.
+//Your tryReadEntry() override has to be ready for both cases.
+void AttributeCollectorProcessor::processResidentAttr(ATTRIBUTE_RECORD_HEADER& attr)
 {
-	size_t offset = 0;
+	//Set this as a dataHeader
+	this->dataHeader = attr;
+	assert(attr.FormCode == RESIDENT_FORM);
+	this->processData(attr.ResidentValuePtr(), attr.Form.Resident.ValueLength);
+}
+
+//Simplified version that reads one complete block of data.
+void AttributeCollectorProcessor::processData(void* data, size_t len)
+{
 	while (auto readSz = tryReadEntry((byte*)data, len)) {
 		data = (void*)((byte*)data + readSz);
 		len -= readSz;
@@ -110,7 +121,7 @@ void NonResidentDataProcessor::processData(void* data, size_t len)
 How to handle a genuine EOF?
 VCN==0 entry contains all the sizes. As soon as we have that, we know the final size.
 */
-bool NonResidentDataProcessor::tryReadMore()
+bool AttributeCollectorProcessor::tryReadMore()
 {
 	if (this->haveDataHeader() && this->m_nextVcn > this->dataHeader.Form.Nonresident.HighestVcn) {
 		this->m_vcnEof = true;
@@ -147,7 +158,7 @@ bool NonResidentDataProcessor::tryReadMore()
 	return true;
 }
 
-int NonResidentDataProcessor::advance()
+int AttributeCollectorProcessor::advance()
 {
 	int steps = 0;
 	while (!m_vcnEof) {
@@ -270,12 +281,80 @@ size_t AttributeListProcessor::tryReadEntry(byte* buf, size_t len)
 
 
 
+MultiSegmentFileLoader::MultiSegmentFileLoader(Volume* vol)
+	: attrList(vol)
+{
+}
+
+MultiSegmentFileLoader::~MultiSegmentFileLoader()
+{
+}
+
+//Start with the base segment and use Mft to load all segments sequentially
+void MultiSegmentFileLoader::load(Mft& mft, SegmentNumber baseSegmentNo)
+{
+	//Initialize $ATTRIBUTE_LIST processing
+	//Even if we never encounter $ATTRIBUTE_LIST, add our own segment 0 as a starting point
+	this->attrList.segments.push_back(baseSegmentNo);
+	int segmentIdx = 0;
+
+	while (segmentIdx < this->attrList.segments.size()) {
+		this->loadSegment(mft, this->attrList.segments[segmentIdx]);
+		//This adds all $Data chunks and all $ATTRIBUTE_LIST chunks mentioned therein.
+		//$Data chunks are independent, while $ATTRIBUTE_LIST chunks can only be processed sequentially.
+		segmentIdx++;
+		//Process however much we can:
+		this->attrList.advance();
+	}
+}
+
+
+//Load this particular segment, either base or secondary. Add its relevant data to the attribute processors.
+void MultiSegmentFileLoader::loadSegment(Mft& mft, SegmentNumber segmentNo)
+{
+	auto segment = mft.newSegmentBuf();
+	mft.readSegmentByIndex(segmentNo, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
+	this->loadSegment((FILE_RECORD_SEGMENT_HEADER*)(segment.data()));
+}
+
+//Load this particular segment from data
+void MultiSegmentFileLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	//Read attributes
+	for (auto& attr : AttributeIterator(segment)) {
+		if (attr.TypeCode == $ATTRIBUTE_LIST) {
+			//Process the attribute list chunk now.
+			//We're only taking note of the segment numbers mentioned, not reading anything, so there's no reason
+			//to delay this until we have read all possible $Data chunks.
+			assert(attr.NameLength == 0); //Only unnamed $ATTRIBUTE_LIST is supported
+			/*
+			We make no attempt to limit the number of $ATTRIBUTE_LIST chunks to one,
+			or to ensure that RESIDENT_FORM entries do not coexist with NONRESIDENT_FORM ones.
+			Doing so could catch us our accidentally going to wrong segments or resolving to wrong clusters,
+			but we will pay with the flexibility in accepting weird things that a real MFT might produce.
+			Whatever. Process everything that it throws at us in this regard.
+			*/
+			if (attr.FormCode == RESIDENT_FORM)
+				this->attrList.processData((char*)&attr + attr.Form.Resident.ValueOffset, attr.Form.Resident.ValueOffset);
+			else
+				this->attrList.addAttrChunk(&attr);
+		}
+		this->processAttr(attr);
+	}
+}
+
+void MultiSegmentFileLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
+{
+	//Override to process additional attributes.
+}
+
+
+
 Mft::Mft(Volume* volume)
-	: NonResidentData(volume), attrList(vol)
+	: NonResidentData(volume), MultiSegmentFileLoader(volume)
 {
 	vol = volume;
 }
-
 
 //Actual loading has to take place after the source Volume figures out its layout.
 //Minimal loading allows us to read arbitrary segments in the first few clusters.
@@ -309,7 +388,6 @@ The approach:
 3. If there's $ATTRIBUTE_LIST, extract all extra segment references and process them sequentially,
   reading data runs from each segment before taking the next one.
 
-
 So we have basically dual task:
 We have to collect the chunks for the $Data attribute and for the $ATTRIBUTE_LIST attribute.
 $Data tells us how to map segments# to LCNs, and $ATTRIBUTE_LIST tells us in which segments# to look for more of the both.
@@ -320,19 +398,8 @@ void Mft::load()
 
 	this->m_vcnMap.clear();
 
-	//Initialize $ATTRIBUTE_LIST processing
-	//Even if we never encounter $ATTRIBUTE_LIST, add our own segment 0 as a starting point
-	this->attrList.segments.push_back(0);
-	int segmentIdx = 0;
-
-	while (segmentIdx < this->attrList.segments.size()) {
-		this->loadMftSegment(this->attrList.segments[segmentIdx]);
-		//This adds all $Data chunks and all $ATTRIBUTE_LIST chunks mentioned therein.
-		//$Data chunks are independent, while $ATTRIBUTE_LIST chunks can only be processed sequentially.
-		segmentIdx++;
-		//Process however much we can:
-		this->attrList.advance();
-	}
+	//Load and process all related segments sequentially, collecting attrList and (via processAttr) vcnMap/data.
+	MultiSegmentFileLoader::load(*this, 0);
 
 	assert(this->m_vcnMap.size() > 0); //MFT should not be empty
 	assert(this->m_vcnMap.front().lcnStart == this->vol->volumeData().MftStartLcn.QuadPart); //First cluster should match the one we started with
@@ -340,54 +407,20 @@ void Mft::load()
 	assert(this->sizeInBytes() % this->BytesPerFileSegment == 0);
 }
 
-/*
-Load one $MFT-related segment, either primary (segment 0) or secondary. Adds its $Data runs to the map.
-If it's primary, follows $ATTRIBUTE_LIST if it's found.
-*/
-void Mft::loadMftSegment(SegmentNumber segmentNo)
+//Called for every attribute chunk found in every segment related to the MFT
+void Mft::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
 {
-	auto segment = newSegmentBuf();
-
-	//Decode lcn
-	//Use a special scheme different from the simple map lookup.
-	//If we do not have a map yet, assume one continuous space starting at the MftStartLcn.
-	if (!this->m_vcnMap.empty())
-		readSegmentByIndex(segmentNo, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
-	else
-		readSegmentByIndexMinimal(segmentNo, (FILE_RECORD_SEGMENT_HEADER*)segment.data());
-
-	auto header = (FILE_RECORD_SEGMENT_HEADER*)(segment.data());
-
-	//Read attributes
-	for (auto& attr : AttributeIterator(header)) {
-		if (attr.TypeCode == $DATA) {
-			if (attr.NameLength != 0)
-				qWarning() << "MFT: Alternate $Data streams in $MFT segment! Highly unusual. Ignoring.";
-			else {
-				assert(attr.FormCode == NONRESIDENT_FORM, "MFT: $Data attribute in $MFT segment must be non-resident.");
-				this->addAttrChunk(&attr);
-			}
-		}
-		if (attr.TypeCode == $ATTRIBUTE_LIST) {
-			//Process the attribute list chunk now.
-			//We're only taking note of the segment numbers mentioned, not reading anything, so there's no reason
-			//to delay this until we have read all possible $Data chunks.
-			assert(attr.NameLength == 0); //Only unnamed $ATTRIBUTE_LIST is supported
-			/*
-			We make no attempt to limit the number of $ATTRIBUTE_LIST chunks to one,
-			or to ensure that RESIDENT_FORM entries do not coexist with NONRESIDENT_FORM ones.
-			Doing so could catch us our accidentally going to wrong segments or resolving to wrong clusters,
-			but we will pay with the flexibility in accepting weird things that a real MFT might produce.
-			Whatever. Process everything that it throws at us in this regard.
-			*/
-			if (attr.FormCode == RESIDENT_FORM)
-				this->attrList.processData((char*)&attr + attr.Form.Resident.ValueOffset, attr.Form.Resident.ValueOffset);
-			else
-				this->attrList.addAttrChunk(&attr);
+	if (attr.TypeCode == $DATA) {
+		if (attr.NameLength != 0)
+			qWarning() << "MFT: Alternate $Data streams in $MFT segment! Highly unusual. Ignoring.";
+		else {
+			assert(attr.FormCode == NONRESIDENT_FORM, "MFT: $Data attribute in $MFT segment must be non-resident.");
+			this->addAttrChunk(&attr);
 		}
 	}
 }
 
+//Allocate a segment buffer, properly sized and properly aligned for this MFT
 AlignedBuffer Mft::newSegmentBuf()
 {
 	AlignedBuffer segment;
@@ -397,6 +430,16 @@ AlignedBuffer Mft::newSegmentBuf()
 
 void Mft::readSegmentByIndex(SegmentNumber segmentNo, FILE_RECORD_SEGMENT_HEADER* segment)
 {
+	/*
+	MFT uses a special convention to safeguard resolving initial additional segments of the MFT itself:
+	If we do not have a map yet, assume one continuous space starting at the MftStartLcn.
+	This IS a chunk of the MFT, we just don't know its length yet.
+	*/
+	if (this->m_vcnMap.empty()) {
+		readSegmentByIndexMinimal(segmentNo, segment);
+		return;
+	}
+
 	auto BytesPerCluster = vol->volumeData().BytesPerCluster;
 
 	VRBN vrbn;
@@ -451,7 +494,7 @@ void Mft::processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count, int* v
 {
 	while (count > 0) {
 		//So apparently records can be uninitialized. These appear closer to the end of the MFT.
-		bool isValidSegment = (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
+		bool isValidSegment = IsValidSegment(segment);
 
 		//Apply fixups
 		if (isValidSegment) {
@@ -465,26 +508,27 @@ void Mft::processSegments(FILE_RECORD_SEGMENT_HEADER* segment, int count, int* v
 	}
 }
 
-bool Mft::IsValidSegment(FILE_RECORD_SEGMENT_HEADER* segment)
+
+void sectorsApplyFixups(MULTI_SECTOR_HEADER* data, int sectors, DWORD bytesPerSector)
 {
-	return (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE"));
+	auto fixupCnt = data->UpdateSequenceArraySize - 1; //1 additional cell is for the UpdateValueNumber
+	assert(fixupCnt == sectors);
+
+	auto fixup = (uint16_t*)((char*)data + data->UpdateSequenceArrayOffset);
+	auto pos = (char*)data + bytesPerSector - 2;
+	auto magic = *(fixup++);
+	while (fixupCnt > 0) {
+		assert(*((uint16_t*)pos) == magic, "Invalid fixup in a segment.");
+		*((uint16_t*)pos) = *fixup;
+		pos += bytesPerSector;
+		fixup++;
+		fixupCnt--;
+	}
 }
 
 void Mft::segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* segment)
 {
-	auto fixupCnt = segment->MultiSectorHeader.UpdateSequenceArraySize - 1; //1 additional cell is for the UpdateValueNumber
-	assert(fixupCnt == this->SectorsPerFileSegment);
-
-	auto fixup = (uint16_t*)((char*)segment + segment->MultiSectorHeader.UpdateSequenceArrayOffset);
-	auto pos = (char*)segment + vol->volumeData().BytesPerSector - 2;
-	auto magic = *(fixup++);
-	while (fixupCnt > 0) {
-		assert(*((uint16_t*)pos) == magic, "Invalid fixup in FILE segment.");
-		*((uint16_t*)pos) = *fixup;
-		pos += vol->volumeData().BytesPerSector;
-		fixup++;
-		fixupCnt--;
-	}
+	sectorsApplyFixups(&segment->MultiSectorHeader, this->SectorsPerFileSegment, vol->volumeData().BytesPerSector);
 }
 
 
@@ -563,7 +607,7 @@ void SegmentIteratorBase::readCurrent()
 		while (true) {
 			if (!segment)
 				break; //Valid run but need a new segment
-			if ((flags & SI_SKIP_INVALID) && (!mft->isValidSegment(segment)))
+			if ((flags & SI_SKIP_INVALID) && (!mft->IsValidSegment(segment)))
 				break;
 			if ((flags & SI_SKIP_NOT_IN_USE) && ((segment->Flags & FILE_RECORD_SEGMENT_IN_USE) == 0))
 				break;
