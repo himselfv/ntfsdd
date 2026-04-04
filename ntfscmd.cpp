@@ -14,6 +14,7 @@
 --dump-segment
 --print-segment
 --dump-cluster
+--list-dir
 */
 
 
@@ -252,6 +253,11 @@ int main2(int argc, char* argv[]) {
 		->delimiter(',');
 
 
+	std::unordered_set<SegmentNumber> listDirs{};
+	app.add_option("--list-dir", listDirs, "List directory contents for this segment.")
+		->group("Processing options")
+		->delimiter(',');
+
 
 
 
@@ -358,6 +364,17 @@ int main2(int argc, char* argv[]) {
 		src.mft.readSegmentByIndex(idx, segment);
 		std::cout << std::endl << "Segment #" << std::to_string(idx) << ":" << std::endl;
 		printSegment(segment);
+	}
+
+
+	DirectoryTreeLoader dirTree(src.mft);
+	for (auto& idx : listDirs) {
+		auto dir = dirTree.get(idx);
+		std::cout << std::endl << "Segment #" << std::to_string(idx) << " index:" << std::endl;
+		std::cout << "  Name: " << dir.name << std::endl;
+		for (auto& child : dir.children) {
+			std::cout << "  #" << child.segmentNo << ": " << child.name << std::endl;
+		}
 	}
 
 	return 0;

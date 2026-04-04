@@ -58,7 +58,7 @@ size_t BitmapProcessor::tryReadEntry(byte* buf, size_t len)
 	if (this->m_bitmap.size == 0)
 		this->m_bitmap.resize(this->sizeInBytes() * 8);
 	assert(bytesProcessed + len <= this->m_bitmap.size / 8);
-	memcpy((byte*)(&this->m_bitmap.data) + bytesProcessed, buf, len);
+	memcpy((byte*)(this->m_bitmap.data) + bytesProcessed, buf, len);
 	bytesProcessed += len;
 	return len;
 }
@@ -68,11 +68,13 @@ size_t BitmapProcessor::tryReadEntry(byte* buf, size_t len)
 DirIndexProcessor::DirIndexProcessor(Volume* vol)
 	: AttributeCollectorProcessor(vol), m_bitmapLoader(vol, m_bitmap)
 {
+	this->m_root.BytesPerIndexBuffer = 0; //Not initialized flag
 }
 
 //Pass index root here. It's always resident, only one instance of it in the multi-segment file.
 void DirIndexProcessor::processIndexRoot(void* data, size_t len)
 {
+	assert(!this->haveIndexRoot(), "Second $INDEX_ROOT encountered in DirIndexProcessor!");
 	assert(len >= sizeof(INDEX_ROOT));
 	auto header = (INDEX_ROOT*)data;
 
@@ -95,7 +97,7 @@ void DirIndexProcessor::processBitmapAttr(ATTRIBUTE_RECORD_HEADER& attr)
 size_t DirIndexProcessor::tryReadEntry(byte* buf, size_t len)
 {
 	//We need $INDEX_ROOT to know the sizes and $BITMAP to know which Index Allocation Buffers are in use.
-	if (!m_haveRoot) return 0;
+	if (!this->haveIndexRoot()) return 0;
 
 	//$BITMAP is dynamically loaded. Check that we have the neccessary number of bits.
 	if (this->m_bitmapLoader.bytesProcessed < (this->m_blockNo / 8) + 1)
@@ -125,7 +127,7 @@ size_t DirIndexProcessor::tryReadEntry(byte* buf, size_t len)
 		return 0;
 
 	auto header = (INDEX_ALLOCATION_BUFFER*)buf;
-	assert(header->MultiSectorHeader.Signature == SIGNATURE_INDX);
+	sectorsCheckSignature(header->MultiSectorHeader, SIGNATURE_INDX);
 
 	auto BytesPerSector = vol->volumeData().BytesPerSector;
 	sectorsApplyFixups(&header->MultiSectorHeader, this->m_root.BytesPerIndexBuffer / BytesPerSector, BytesPerSector);
@@ -154,20 +156,32 @@ void DirIndexProcessor::readIndexEntries(INDEX_HEADER* header)
 		return;
 
 	auto data = (byte*)header + header->FirstIndexEntry;
-	auto len = header->FirstFreeByte; //"Offset from FirstIndexEntry to the first free byte"
+	assert(header->FirstFreeByte > header->FirstIndexEntry);
+	auto len = header->FirstFreeByte - header->FirstIndexEntry;
 	
 	//I know I just said we're not doing tryRead here, but...
 	while (auto readSz = tryReadIndexEntry((byte*)data, len)) {
 		data += readSz;
 		len -= (ULONG)readSz;
 	}
+
+	/*
+	FirstFreeByte is reportedly quad-word aligned so shouldn't we allow up to 15 bytes of slack?
+	But when we process existing entries we simply append their Length; there's no other way.
+	Yet we are supposedly jumping to quad-word-aligned start of the next INDEX_ENTRY.
+	This means that the previous entry's Length itself should be quad-word aligned!
+	If this is so, then it makes no sense to keep only the final Length unaligned and leave alignment slack space.
+	Therefore I strongly suspect all Lengths are quad-aligned and alignment slack should be 0.
+	*/
 	assert_eq(len, 0, "Unprocessed data in an INDEX_ALLOCATION_BUFFER");
 }
 
 //Reads INDEX_ENTRY which is the same for $INDEX_ALLOCATION and $INDEX_ROOT.
 size_t DirIndexProcessor::tryReadIndexEntry(byte* buf, size_t len)
 {
-	if (len < sizeof(INDEX_ENTRY)) return 0;
+	//Terminator entries are 16 bytes! Less than sizeof(INDEX_ENTRY).
+	if (len < INDEX_ENTRY_MIN_SIZE) return 0;
+
 	auto entry = (INDEX_ENTRY*)buf;
 	if (len < entry->Length) return 0;
 
@@ -197,6 +211,12 @@ DirEntryLoader::DirEntryLoader(Mft& mft)
 {
 }
 
+void DirEntryLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	MultiSegmentFileLoader::loadSegment(segment);
+	this->advance();
+}
+
 void DirEntryLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
 {
 	MultiSegmentFileLoader::processAttr(attr);
@@ -213,8 +233,11 @@ void DirEntryLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
 	}
 	if (attr.TypeCode == $INDEX_ALLOCATION && attrName == "$I30") {
 		this->addAttrChunk(&attr);
-		this->advance();
 	}
+	//Do not do advance() here as very often we'll lack $BITMAP or $INDEX_ROOT and simply read out all available data, blowing up the buffers.
+	//Do it after the complete segment load.
+	//This way if this is a single-segment entry, we simply process it after gathering all the info.
+	//Multi-segment entries will still be parsed fine.
 }
 
 
@@ -240,7 +263,11 @@ MftDirEntry DirectoryTreeLoader::load(SegmentNumber segmentNo)
 	loader.load(mft, segmentNo);
 	result.name = std::move(loader.filename.filename);
 	for (auto& childEntry : loader.entries) {
-		result.children.push_back(childEntry.segmentNo);
+		MftChildEntry child;
+		child.segmentNo = childEntry.segmentNo;
+		child.name = std::move(childEntry.filename);
+		result.children.push_back(child);
 	}
+	loader.assert_all_processed();
 	return result;
 }

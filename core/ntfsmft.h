@@ -12,22 +12,21 @@
 typedef LARGE_INTEGER VRBN;
 
 /*
-Файл описывается одним или несколькими (в разных сегментах) атрибутами $Data,
-которые содержат списки подряд идущих DataRun, описывающие VCN с первого по последний указанные для данного атрибута в данном сегменте.
+Non-resident attribute data is described by one or many (in different segments) attribute chunks
+which contain lists of consecutive Data Runs for VCNs in the first..last span declared for the attribute in this chunk.
 
-Например:
-Сегмент 1:
-$Data VCN0=0, VCN1=100, Runs=0-15,116-200
-Сегмент 2:
-$Data VCN0=101, VCN1=200, Runs=301-320,521-600
+Segment 1:
+  $Data VCN0=0, VCN1=100, Runs=0-15,116-200
+Segment 2:
+  $Data VCN0=101, VCN1=200, Runs=301-320,521-600
 
-Мы превращаем всё это в плоскую структуру:
+We convert this to a flat sorted list VCN->LCN, len:
 0: 0
 16: 116
 101: 301
 121: 521
 
-ATTRIBUTE_FLAG_SPARSE и встречающиеся в нём sparse runs сейчас не поддерживаем, хотя в принципе это несложно.
+ATTRIBUTE_FLAG_SPARSE and the sparse runs in those are not supported atm even though it should be easy.
 */
 struct VcnMapEntry {
 	VCN vcnStart = 0;
@@ -85,10 +84,11 @@ Mostly needed for $ATTRIBUTE_LIST processing below but can be reused for anythin
 Users:
 - Pass addAttr() as you encounter matching attribute chunks.
 - Call advance() after each chunk or at opportune times.
+- assert_no_leftovers() when processing is complete.
 
 Descendants:
 - Override tryReadEntry()
-- Each call, try to read a complete something from the avaiable data. Return the size read (which guarantees
+- Try to read a complete something from the avaiable data. Return the size read (which guarantees
   another call to tryReadEntry), or 0 (which delays next call until more data is available).
 
 Resident attributes:
@@ -126,7 +126,25 @@ public:
 	//This will scan all currently available new sequential data and process any complete entry.
 	int advance();
 
-	inline bool eof() { return this->m_vcnEof && this->remainingBytesInBuf()==0; }
+	//Asserts that this attribute is either missing or has been completely processed, with no unprocessed data left.
+	inline void assert_all_processed() {
+		assert(this->bof() || this->eof(), "Unprocessed data left in AttributeCollectorProcessor");
+	}
+
+	//True if no attributes has ever been passed here, resident or non-resident.
+	//False if we have seen at least one attribute chunk.
+	inline bool bof() {
+		return this->m_vcnMap.empty() //No non-resident chunks seen
+			&& !this->m_vcnEof; //No complete resident attributes processed
+	}
+
+	//True if we have read everything there is to read in this non-resident data.
+	//True after any single call to processResidentAttr().
+	//False if no attributes has ever been passed here.
+	inline bool eof() {
+		return this->m_vcnEof //Have read all clusters there are to read
+			&& this->remainingBytesInBuf()==0;
+	}
 };
 
 
@@ -178,15 +196,21 @@ public:
 };
 
 
+
+inline bool sectorsCheckSignature(MULTI_SECTOR_HEADER& header, const UCHAR signature[4])
+{
+	return (*((uint32_t*)(&(header.Signature))) == *((const uint32_t*)(&signature[0])));
+}
+
 //Applies fixups to a given number of sectors, according to the fixup table in MULTI_SECTOR_HEADER.
 //Thankfully, MULTI_SECTOR_HEADER is the first thing in all structs where it is used so we need no separate data pointer.
 void sectorsApplyFixups(MULTI_SECTOR_HEADER* data, int sectors, DWORD bytesPerSector);
 
 
 /*
-От MFT нам нужен следующий функционал:
-1. Итерация по всем записям.
-2. Возможность вытащить запись по её VCN. Зная размер записи, мы можем расчитать LCN + отступ записи в ней.
+MFT access:
+- Segment iteration
+- Ability to extract a segment by its number/VCN
 */
 class Mft : public NonResidentData, public MultiSegmentFileLoader {
 public:
@@ -213,9 +237,12 @@ public:
 	void segmentApplyFixups(FILE_RECORD_SEGMENT_HEADER* segment);
 
 	inline static bool IsValidSegment(FILE_RECORD_SEGMENT_HEADER* segment) {
-		return (*((uint32_t*)(&(segment->MultiSectorHeader.Signature))) == *((uint32_t*)"FILE")); };
+		return sectorsCheckSignature(segment->MultiSectorHeader, SIGNATURE_FILE);
+	}
 };
 
+//$BITMAP file. Not the same thing as a $BITMAP attribute on a normal file.
+//This one stores its data as $DATA.
 class NtfsBitmapFile : public NonResidentData {
 public:
 	VOLUME_BITMAP_BUFFER* buf = nullptr;

@@ -89,10 +89,10 @@ struct DirIndexEntry {
 class DirIndexProcessor : public AttributeCollectorProcessor {
 protected:
 	INDEX_ROOT m_root;
+	inline bool haveIndexRoot() { return this->m_root.BytesPerIndexBuffer > 0; }
 	BitmapBuf m_bitmap;
 	BitmapProcessor m_bitmapLoader;
 	int m_blockNo = 0;
-	bool m_haveRoot = false;
 
 	virtual size_t tryReadEntry(byte* buf, size_t len) override;
 	void readIndexEntries(INDEX_HEADER* header);
@@ -115,7 +115,8 @@ class DirEntryLoader : public MultiSegmentFileLoader, public DirIndexProcessor
 public:
 	FilenameEntry filename;
 	DirEntryLoader(Mft& mft);
-	virtual void processAttr(ATTRIBUTE_RECORD_HEADER& attr) override; //Read the filename too.
+	virtual void loadSegment(FILE_RECORD_SEGMENT_HEADER* segment) override;
+	virtual void processAttr(ATTRIBUTE_RECORD_HEADER& attr) override;
 };
 
 
@@ -129,11 +130,16 @@ INDEX_ROOT всегда resident, поэтому он встречается м�
 целиком в один заход.
 INDEX_ALLOCATION нужно обрабатывать накопительно.
 */
+struct MftChildEntry
+{
+	SegmentNumber segmentNo;
+	std::string name;
+};
 struct MftDirEntry
 {
 	SegmentNumber segmentNo;
 	std::string name;
-	std::vector<SegmentNumber> children;
+	std::vector<MftChildEntry> children;
 };
 class DirectoryTreeLoader
 {

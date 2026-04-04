@@ -489,15 +489,24 @@ typedef struct _INDEX_HEADER {
     //  Entry.
     ULONG FirstIndexEntry;                                          //  offset = 0x000
 
-    //  Offset from the start of the first index entry to the first
-    //  (quad-word aligned) free byte.
-    ULONG FirstFreeByte;                                            //  offset = 0x004
+    //  Offset from the start of this structure to the first (quad-word
+	//  aligned) free byte.
+	//
+	// WARNING:
+	//  Some headers erroneously say this is "from the first index entry",
+	//  making it effectively LengthInBytes. This is wrong. It's wrong
+	//  in practice and the same attribute in FILE_RECORD_SEGMENT_HEADER
+	//  also doesn't work this way.
+	ULONG FirstFreeByte;                                            //  offset = 0x004
 
-    //  Total number of bytes available, from the start of the first
-    //  index entry.  In the Index Root, this number must always be
-    //  equal to FirstFreeByte, as the total attribute record will
-    //  be grown and shrunk as required.
-    ULONG BytesAvailable;                                           //  offset = 0x008
+    //  Total number of bytes available, from the start of this structure.
+    //  In the Index Root, this number must always be equal to FirstFreeByte,
+	//  as the total attribute record will be grown and shrunk as required.
+	//
+	// WARNING:
+	//  Some headers erroneously report this as "from the first index entry",
+	//  this is wrong - see FirstFreeByte.
+	ULONG BytesAvailable;                                           //  offset = 0x008
 
     //  INDEX_xxx flags.
     UCHAR Flags;                                                    //  offset = 0x00C
@@ -642,3 +651,6 @@ typedef INDEX_ENTRY *PINDEX_ENTRY;
 //  This entry is the special END record for the Index or Index
 //  Allocation buffer.
 #define INDEX_ENTRY_END                  (0x0002)
+
+// INDEX_ENTRY_END entries are 16 bytes! Less than sizeof(INDEX_ENTRY).
+#define INDEX_ENTRY_MIN_SIZE 16

@@ -84,6 +84,9 @@ This class handles that:
 AttributeCollectorProcessor::AttributeCollectorProcessor(Volume* vol)
 	: NonResidentData(vol)
 {
+	//Reserve some space for typical processing but be ready to collect any length of data
+	//Some processors want blocks of multiple clusters, others simply cannot process until they see some particular attribute.
+	//It's the job of the caller to manage memory expectations. Don't collect endlessly on data that can get big.
 	m_buf.reserve(vol->volumeData().BytesPerCluster * 2);
 	m_pos = m_buf.data();
 }
@@ -105,6 +108,7 @@ void AttributeCollectorProcessor::processResidentAttr(ATTRIBUTE_RECORD_HEADER& a
 	this->dataHeader = attr;
 	assert(attr.FormCode == RESIDENT_FORM);
 	this->processData(attr.ResidentValuePtr(), attr.Form.Resident.ValueLength);
+	this->m_vcnEof = true;
 }
 
 //Simplified version that reads one complete block of data.
@@ -139,8 +143,8 @@ bool AttributeCollectorProcessor::tryReadMore()
 	//To have m_pos at the beginning of the buffer.
 
 	auto oldSize = m_buf.size();
-	assert(oldSize < clusterSize); //We have reserved 2x this, so we need less than 1x used
-								   //Honestly, we don't care: if someone reads ahead, whatever, let's try to update pointers after resize:
+
+	//Resize the buffer and update the pointers in case there was reallocation:
 	m_buf.resize(m_buf.size() + clusterSize);
 	m_pos = m_buf.data();
 
@@ -163,7 +167,8 @@ int AttributeCollectorProcessor::advance()
 	int steps = 0;
 	while (!m_vcnEof) {
 		size_t rem = this->remainingBytesInBuf();
-		while (auto sz = tryReadEntry(m_pos, rem)) {
+		size_t sz = 0;
+		while ((rem > 0) && (sz = tryReadEntry(m_pos, rem))) {
 			m_pos += sz;
 			rem -= sz;
 			steps++;
@@ -306,6 +311,8 @@ void MultiSegmentFileLoader::load(Mft& mft, SegmentNumber baseSegmentNo)
 		//Process however much we can:
 		this->attrList.advance();
 	}
+
+	this->attrList.assert_all_processed();
 }
 
 
