@@ -462,21 +462,21 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	SegmentInclusionOptions includes;
 	SegmentInclusionOptions excludes;
 	bool bAddStandardIncludes = true;
-	skipOptions.add_option("--exclude-segments, --skip-segments", excludes.segments, "Skip MFT entries with these numbers.")
+	skipOptions.add_option("--exclude-segment, --skip-segment", excludes.segments, "Skip MFT entries with these numbers.")
 		->delimiter(',');
 	skipOptions.add_option("--exclude-subtree", excludes.segmentRoots, "Skip MFT entries with these numbers and all their children.")
 		->delimiter(',');
-	skipOptions.add_option("--include-segments, --dirty-segments", includes.segments, "Always consider these MFT entries dirty.")
+	skipOptions.add_option("--include-segment, --dirty-segment", includes.segments, "Always consider these MFT entries dirty.")
 		->delimiter(',');
 	skipOptions.add_option("--include-subtree, --dirty-subtree", includes.segmentRoots, "Always consider these MFT entries dirty with their children.")
 		->delimiter(',');
-	skipOptions.add_option("--exclude-paths", excludes.paths, "Skip these particular paths. If it's a dir, skips everything in it.")
+	skipOptions.add_option("--exclude-path", excludes.paths, "Skip these particular paths. If it's a dir, skips everything in it.")
 		->delimiter(',');
-	skipOptions.add_option("--include-paths", includes.paths, "Always consider these particular paths dirty. If it's a dir, applies to everything in it.")
+	skipOptions.add_option("--include-path", includes.paths, "Always consider these particular paths dirty. If it's a dir, applies to everything in it.")
 		->delimiter(',');
-	skipOptions.add_option("--exclude-files", excludes.files, "Skip these particular files. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
+	skipOptions.add_option("--exclude-file", excludes.files, "Skip these particular files. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
 		->delimiter(',');
-	skipOptions.add_option("--include-files", includes.files, "Always consider these particular files dirty. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
+	skipOptions.add_option("--include-file", includes.files, "Always consider these particular files dirty. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
 		->delimiter(',');
 
 	skipOptions.add_option("--standard-includes", bAddStandardIncludes, "Mark $Extend, System Volume Information and Boot dirs dirty wil all the content. Recommended.")

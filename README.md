@@ -162,21 +162,23 @@ defrag /Retrim DriveLetter:
 ```
 Trims all empty sectors on the target volume. Run after a full clone or from time to time after updates. I'd advise not running retrim after every update as: 1. The changes are likely limited and it's not that urgent. 2. This raises your chances to notice an update going awry and recover data before its trimmed. Just in case!
 
-With regular and limited updates I think you can even retrim only occasionally, manually. If a non-trimmed empty sector is reused, 
+With regular and limited updates I think you can even retrim only occasionally, manually. If a non-trimmed "empty" sector is reused, for the SSD it simply looks like you're overwriting your own data. It's suboptimal (the SSD could rotate the backing sector with trim) but it's a normal work mode. You're doing this to files all the time when you change their contents.
 
 
 
-## Ignoring files
-There's minimal ability to ignore files. Read carefully what it does! It's not meant as a full filename-based filtering. This is just to skip ```hiberfil.sys``` and ```pagefile.sys```.
+## Ignoring/enforcing files
+There's minimal ability to ignore files. Read carefully what it does! It's not meant as a full filename-based filtering. This is just to skip ```hiberfil.sys``` and ```pagefile.sys``` and so on.
 
-1. Do ```--print-files-to changelist.txt```
+These options only work with MFT-based selection.
 
-2. Locate the segment numbers of the files you want to ignore (first column)
+* ``--exclude-segment``, ``--exclude-file`` excludes this single file (all of its segments) OR DIR, ALONE.
 
-3. Add ```--skip-segments A,B,C```
+* ``--exclude-subtree``, ``--exclude-path`` excludes this file (all of its segments) or dir, with all its contents recursively.
+
+* ``--include-*`` forcefully marks files as dirty. Same zoo of versions as with ``--exclude``
 
 
-What this does:
+What this ``--exclude`` does:
 
 * MFT segments will be copied anyway. MFTs will always match perfectly. The cluster usage on the volumes must always match!
 
@@ -192,11 +194,14 @@ WARNING: Security risk. Data from other files will leak into these. Might not ma
 * Manually ```del``` the file on the destination after cloning if you care.
 
 
-**Q**: Why not accept file names?\
-**A**: This will require two passes over the MFT + always parsing filenames and will slow the process considerably. Also, lots of work.
+In the same, but safer, way you can force the file clusters to ALWAYS be selected with ``--include-``. Internally this is used to handle driver magic folders such as System Volume Information. This has absolutely NO side effects except for more data to rcw/copy each time.
+
+
+**Q**: Can I pass file names and paths?\
+**A**: Yeah, with limitations. Symlinks not suppored, pass real paths. A file referenced by ANY of its paths (hardlinks) will be skipped/dirtied. Doesn't matter if there are no rules for the other hardlinks.
 
 **Q**: Why not delete ignored files?\
-**A**: This requires editing the destination MFT, $Bitmap, the transaction log and getting involved in the NTFS internals much deeper than required by our simple cloning. Just delete the file with ```del``` later.
+**A**: This requires editing the destination MFT, $Bitmap, the transaction log and getting involved in the NTFS internals much deeper than required for our simple cloning. Just delete the file with ```del``` later.
 
 **Q**: Why don't you at least trim the clusters you're skipping, to prevent data leaks?\
 **A**: See the Trim section. Best to stay away from trim.
@@ -205,7 +210,11 @@ WARNING: Security risk. Data from other files will leak into these. Might not ma
 **A**: ```hiberfil.sys``` and ```pagefile.sys```. When you boot from the clone, the system may not boot the first time around due to garbage in ``hiberfil.sys``. It should delete it on the second boot. If it fails to do so, help it.
 
 **Q**: Why not skip ``$BadClus``?\
-**A**: Indeed: Copying the map of physical bad clusters elsewhere rarely makes sense. But keeping the old map also makes no sense! We're duplicating the source clusters precisely. What if those clusters are marked bad on the destination? Cluster-by-cluster copy just doesn't mesh with bad cluster maps. Thankfully, these days bad clusters are managed by the hardware and $BadClus in NTFS is unused. So we copy it like any other file.
+**A**: True: Copying the map of physical bad clusters elsewhere rarely makes sense. But keeping the old map also makes no sense! We're duplicating the source clusters precisely. What if those clusters are marked bad on the destination? Cluster-by-cluster copy just doesn't mesh with bad cluster maps. Thankfully, these days bad clusters are managed by the hardware and $BadClus in NTFS is unused. So we copy it like any other file.\
+Honestly, we could skip it. Skip it at your peril. Anyway, I don't think it should even change, so why bother.
+
+**Q**: Why is this only working with MFT selection modes?\
+**A**: Not much sense in it in other modes. Bitmap already includes all there is to include. Bitmap+Exclusion might make some sense if you want "100% guaranteed coverage minus manually excluded paths" but it's a strange thing to do and currently not implemented.
 
 
 
@@ -226,6 +235,22 @@ There are some tests, write more.
 
 ### Is the Bitmap selection system safe?
 Bitmap selection is slow but should be 100% safe. We're comparing ALL clusters that the source file system says are in use. You really have to break NTFS fundamentally for this to be less than a full clone.
+
+
+
+### What the MFT comparison system does, precisely?
+It reads the volume index (the $MFT) and compares the same file header records ("segments") on both volumes:
+
+* The MFT itself is always "selected". This means ALL the segments ("file headers") will always be verified/copied.
+
+* Segments not IN_USE on the source are skipped (see "Deletions" below)
+
+* Identical segments are skipped
+
+* If segments differ, all the external clusters referenced in the source segment are "selected".
+
+* For multi-segment files, the decision is made for the entire set of file segments together.
+
 
 
 ### Is the MFT comparison system safe?
@@ -268,3 +293,12 @@ This is not a problem because the precise moment when the clone runs is arbitrar
 Creating a shadow is supposed to trigger flushing all possible caches, including writing out any cached modtimes and segments (which can otherwise be cached in some cases for up to, sources tell, hours). There's no real guarantee this will happen.
 HOWEVER. What we care about is *eventual* consistency. Even if you miss some changes today, if you do the sync again you'll catch it later. The goal is to have no *permanently undetectable* changes. And to have no *inconsistent FS*. We guarantee FS consistency by force-comparing the MFT (which gives us power-down crash consistency, and maybe more, if VSS+writers work as intended).
 With FS-consistency, file-inconsistency, if any, will look like recently changed files having 1. Their old content (if their cached segment changes have not been written out) - their state should be consistent with the state of the rest of the volume. If any inconsistencies are present, those will get resolved in the same way as when you reboot after a sudden power-down, by using the NTFS log journal. 2. Their old content (if the content had changed, no segment changes had been needed, no size change had happened, and the lastmodtime and LSN/USN/stuff had not yet been written down to disk). 3. Purely theoretically, maybe in some cases, garbage (can't invent examples right now, but it's one of the theoretically stable states of the volume where some updates had been skipped).
+
+
+### What about deletions?
+The algorithm only compares segments which are IN_USE on the source. What about the segments that were IN_USE but are now not? Do we not need to free their segments?
+
+No! We're selecting clusters to verify/copy. *Which* clusters are in use depends only on the $MFT itself and on $Bitmap, not the content of those clusters. We *always* sync the entire $MFT and $Bitmap, and so we always copy the entire actual picture of what clusters are now not in use. We do not need to copy those clusters.
+
+Do we not need to update the segment on the destination? Yes we do, and we will, even without selecting its clusters: Again: We *always* sync the entire $MFT and $Bitmap.
+
