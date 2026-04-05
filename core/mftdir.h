@@ -146,5 +146,34 @@ protected:
 public:
 	DirectoryTreeLoader(Mft& mft);
 	MftDirEntry& get(SegmentNumber segmentNo);
+	SegmentNumber traverse(const std::string& path);
+	std::unordered_set<SegmentNumber> traversePaths(const std::vector<std::string>& paths);
 };
 
+
+
+/*
+Syntactic sugar for inclusion/exclusion options on the command line.
+Collects inclusions/exclusions in various ways (segments, file names) and then resolves all of them into two lists:
+1. Segments to be excluded.
+2. Segments whose direct descendants are to be excluded.
+
+Usage:
+ - Populate any of the public sets.
+ - setTree();
+   resolve();
+*/
+struct SegmentInclusionOptions {
+protected:
+	DirectoryTreeLoader* dirTree = nullptr;
+	void resolvePaths();
+public:
+	std::unordered_set<SegmentNumber> segments;
+	std::unordered_set<SegmentNumber> segmentRoots;
+	std::vector<std::string> paths {};
+	std::vector<std::string> files {};
+
+	void setTree(DirectoryTreeLoader* dirTree);
+	void resolve();
+	void printDebugInfo();
+};

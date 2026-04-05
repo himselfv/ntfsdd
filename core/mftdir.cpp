@@ -241,6 +241,32 @@ void DirEntryLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
 }
 
 
+//It was a great idea to store everything in UTF-8 but now we need string comparison, damn
+bool utf8_iequals(const std::string& str1, const std::string& str2) {
+	auto to_utf16 = [](const std::string& utf8) {
+		if (utf8.empty()) return std::wstring();
+		int size_needed = MultiByteToWideChar(CP_UTF8, 0, &utf8[0], (int)utf8.size(), NULL, 0);
+		std::wstring wstrTo(size_needed, 0);
+		MultiByteToWideChar(CP_UTF8, 0, &utf8[0], (int)utf8.size(), &wstrTo[0], size_needed);
+		return wstrTo;
+	};
+
+	std::wstring wstr1 = to_utf16(str1);
+	std::wstring wstr2 = to_utf16(str2);
+
+	// Use LOCALE_NAME_INVARIANT for consistent cross-culture behavior
+	// or a specific locale like L"en-US" for linguistic correctness.
+	int result = CompareStringEx(
+		LOCALE_NAME_INVARIANT,
+		NORM_IGNORECASE,
+		wstr1.c_str(), -1,
+		wstr2.c_str(), -1,
+		NULL, NULL, 0
+	);
+
+	return result == CSTR_EQUAL;
+}
+
 
 DirectoryTreeLoader::DirectoryTreeLoader(Mft& mft)
 	: mft(mft)
@@ -271,3 +297,150 @@ MftDirEntry DirectoryTreeLoader::load(SegmentNumber segmentNo)
 	loader.assert_all_processed();
 	return result;
 }
+
+SegmentNumber DirectoryTreeLoader::traverse(const std::string& path)
+{
+	const std::string pathSep = "\\";
+	std::string remainingPath = path;
+
+	//Completely empty paths do NOT reference root, this requires at least one / or .
+	if (remainingPath.empty()) {
+		qWarning() << "traverse: Completely empty path cannot be resolved." << std::endl;
+		return -1;
+	}
+
+	SegmentNumber currentSegment = 5;
+	std::vector<SegmentNumber> segments {};
+
+	size_t pos = 0;
+	std::string token;
+	while (!remainingPath.empty()) {
+		auto pos = remainingPath.find(pathSep);
+		if (pos != std::string::npos) {
+			token = remainingPath.substr(0, pos);
+			remainingPath.erase(0, pos + pathSep.length());
+		}
+		else {
+			token = remainingPath;
+			remainingPath.clear();
+		}
+
+		if (token == "") continue;
+		if (token == ".") continue; //Simply "current dir", or root
+		//Do minimal handling of these. Could have skipped going into dirs entirely!
+		if (token == "..") {
+			assert(segments.size() > 0, "Invalid path: .. above root");
+			currentSegment = segments.back();
+			segments.pop_back();
+			continue;
+		}
+
+		//Query the current segment contents
+		MftDirEntry& dirEntry = this->get(currentSegment);
+		bool found = false;
+		for (auto& childEntry : dirEntry.children) {
+			if (utf8_iequals(childEntry.name, token)) {
+				segments.push_back(currentSegment);
+				currentSegment = childEntry.segmentNo;
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			qWarning() << "Cannot locate path component: " << token << std::endl;
+			return -1;
+		}
+	}
+
+	qDebug() << "Resolved " << path << " to " << currentSegment << "." << std::endl;
+	return currentSegment;
+}
+
+std::unordered_set<SegmentNumber> DirectoryTreeLoader::traversePaths(const std::vector<std::string>& paths)
+{
+	std::unordered_set<SegmentNumber> results;
+	for (auto& path : paths) {
+		auto segmentNo = traverse(path);
+		if (segmentNo == -1)
+			qWarning() << "Path not found: " << path << std::endl;
+		else
+			results.insert(segmentNo);
+	}
+	return results;
+}
+
+
+
+
+/*
+We should try to minimize direct segmentNos and prefer segmentRoots.
+If we're adding a segment as a child of another segment, we should not add it to direct segments ever.
+It's already excluded via its parent.
+*/
+
+void SegmentInclusionOptions::setTree(DirectoryTreeLoader* dirTree)
+{
+	this->dirTree = dirTree;
+}
+
+void SegmentInclusionOptions::resolvePaths()
+{
+	//All -files and -paths lists have to be traversed and added
+	for (auto& segmentNo : dirTree->traversePaths(paths))
+		segmentRoots.insert(segmentNo);
+	for (auto& segmentNo : dirTree->traversePaths(files))
+		segments.insert(segmentNo);
+}
+
+void SegmentInclusionOptions::resolve()
+{
+	this->resolvePaths();
+
+	//Now that we have everything in two lists, we have to resolve subtrees
+
+	//Add the root entries to the direct exclusion
+	for (auto& segmentNo : segmentRoots)
+		segments.insert(segmentNo);
+	//From here on, loadSubtrees ONLY contains the children of exclusions or the roots already added directly.
+	//So don't add anything to direct exclusions now.
+
+	//Move segmentRoots to the queue and them back as they are processed. Prevents duplicate processing and recursion.
+	std::unordered_set<SegmentNumber> loadSubtrees = std::move(segmentRoots);
+
+	//Process entries from loadSubtrees, adding new ones as we encounter them
+	while (!loadSubtrees.empty()) {
+		auto it = loadSubtrees.begin();
+		auto segmentNo = *it;
+		loadSubtrees.erase(it);
+
+		auto pair = segmentRoots.insert(segmentNo);
+		if (!pair.second)
+			continue; //Already processed
+
+		auto& entry = dirTree->get(segmentNo);
+		for (auto& childEntry : entry.children) {
+			if (segmentRoots.find(childEntry.segmentNo) == segmentRoots.end())
+				loadSubtrees.insert(childEntry.segmentNo);
+		}
+	}
+
+	this->printDebugInfo();
+}
+
+void SegmentInclusionOptions::printDebugInfo()
+{
+	qDebug() << "Segment list:" << std::endl;
+	for (auto& segmentNo : segments)
+		qDebug() << " #" << segmentNo;
+	qDebug() << std::endl;
+
+	qDebug() << "SegmentRoot list:" << std::endl;
+	for (auto& segmentNo : segmentRoots)
+		qDebug() << " #" << segmentNo;
+	qDebug() << std::endl;
+}
+
+
+
+

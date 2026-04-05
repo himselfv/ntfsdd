@@ -439,24 +439,52 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		;
 
 
-	std::unordered_set<SegmentNumber> skipSegments{};
-	app.add_option("--skip-segments", skipSegments, "Skip MFT entries with these numbers. Only works for MFT modes. The segments are still copied, the data is skipped.")
-		->group("Processing options")
+	/*
+	The following options only work with MFT modes. In Bitmap mode, everything is pretty much guaranteed to be covered.
+	Skipping file data in Bitmap MIGHT make some sense but we didn't bother to implement this for now.
+
+	Multi-parenting:
+	A file can be included in multiple dirs. Atm skipping/including either affects the file with finality.
+
+	Skipping and MFT complement:
+	You usually want to disable your exclusions when doing MFT complement. Supposedly you want to know what's missing,
+	and those exclusions will be counted as missing. (You do exclude them after all).
+
+	Skipping and reparse points:
+	Atm we do not traverse reparse points when handling paths. Pass us true paths.
+	*/
+	auto& skipOptions = *app.add_option_group("MFT Inclusion Options",
+		"Include/exclude MFT segments into the final selection manually. Only works for MFT modes. Careful! READ THE DOCS!\n"
+		"Exclude: The segments are still copied, THEIR DATA is skipped => stale/garbage.\n"
+		"Include: Always consider these MFT entries dirty (rcw/copy their data).");
+
+	
+	SegmentInclusionOptions includes;
+	SegmentInclusionOptions excludes;
+	bool bAddStandardIncludes = true;
+	skipOptions.add_option("--exclude-segments, --skip-segments", excludes.segments, "Skip MFT entries with these numbers.")
+		->delimiter(',');
+	skipOptions.add_option("--exclude-subtree", excludes.segmentRoots, "Skip MFT entries with these numbers and all their children.")
+		->delimiter(',');
+	skipOptions.add_option("--include-segments, --dirty-segments", includes.segments, "Always consider these MFT entries dirty.")
+		->delimiter(',');
+	skipOptions.add_option("--include-subtree, --dirty-subtree", includes.segmentRoots, "Always consider these MFT entries dirty with their children.")
+		->delimiter(',');
+	skipOptions.add_option("--exclude-paths", excludes.paths, "Skip these particular paths. If it's a dir, skips everything in it.")
+		->delimiter(',');
+	skipOptions.add_option("--include-paths", includes.paths, "Always consider these particular paths dirty. If it's a dir, applies to everything in it.")
+		->delimiter(',');
+	skipOptions.add_option("--exclude-files", excludes.files, "Skip these particular files. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
+		->delimiter(',');
+	skipOptions.add_option("--include-files", includes.files, "Always consider these particular files dirty. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
 		->delimiter(',');
 
-	std::unordered_set<SegmentNumber> dirtySegments{};
-	app.add_option("--dirty-segments", dirtySegments, "Always consider these MFT entries dirty (rcw/copy their data). Only works for MFT modes.")
-		->group("Processing options")
-		->delimiter(',');
-
-	std::unordered_set<SegmentNumber> dirtySubtreeRoots{};
-	app.add_option("--dirty-subtree,--dirty-subdir", dirtySubtreeRoots, "Always consider files IN these MFT entries dirty (rcw/copy their data). One level deep. See the docs.")
-		->group("Processing options")
+	skipOptions.add_option("--standard-includes", bAddStandardIncludes, "Mark $Extend, System Volume Information and Boot dirs dirty wil all the content. Recommended.")
 		->delimiter(',');
 
 	bool bMarkAllIndexClustersDirty = false;
-	app.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. Indexes may change subtly without this being reflected in the MFT entries. May or may not be neccessary.")
-		->group("Processing options")
+	skipOptions.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. "
+		"Indexes may change subtly without this being reflected in the MFT entries. May or may not be neccessary.")
 		->capture_default_str()
 		;
 
@@ -474,83 +502,72 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 
 
+	/*
+	Output options.
+	*/
+	auto& outputOptions = *app.add_option_group("Output options", "");
+
 	//Human readable sizes
-	app.add_flag("--human-readable", LogPrinter::humanReadableSizes, "Print sizes in human-readable values instead of always in bytes.")
-		->group("Output options")
+	outputOptions.add_flag("--human-readable", LogPrinter::humanReadableSizes, "Print sizes in human-readable values instead of always in bytes.")
 		->capture_default_str()
 		;
 
-
 	//In List mode, prints selected clusters. In Compare/Rvw modes prints changed clusters.
 	ClusterPrinter clusterPrinter;
-	app.add_option("--print-clusters", clusterPrinter.outputFile, "In List and Compare modes, print selected and matching clusters respectively.")
-		->group("Output options")
+	outputOptions.add_option("--print-clusters", clusterPrinter.outputFile, "In List and Compare modes, print selected and matching clusters respectively.")
 		->expected(0,0)
 		->default_str("-")
 		;
 
-	app.add_option("--print-clusters-to", clusterPrinter.outputFile, "Same as --print-clusters but allows you to specify a file.")
-		->group("Output options")
+	outputOptions.add_option("--print-clusters-to", clusterPrinter.outputFile, "Same as --print-clusters but allows you to specify a file.")
 		;
 
-	app.add_flag("--cluster-spans", clusterPrinter.clustersAsSpans, "For modes that print cluster lists, print cluster spans instead of individual clusters.")
-		->group("Output options")
+	outputOptions.add_flag("--cluster-spans", clusterPrinter.clustersAsSpans, "For modes that print cluster lists, print cluster spans instead of individual clusters.")
 		->capture_default_str()
 		;
 
-	app.add_option("--cluster-separator", clusterPrinter.separator, "For modes that print cluster lists, use this as a separator (\\n etc allowed).")
+	outputOptions.add_option("--cluster-separator", clusterPrinter.separator, "For modes that print cluster lists, use this as a separator (\\n etc allowed).")
 		->transform(CLI::EscapedString)
-		->group("Output options")
 		;
 
 
 	//In List mode, this is going to print *selected* files. In Compare/Rvw, the files with actual *differences* (interspersed with clusters)
 	//Note that this will not print DELETED files. The comparison is one-way.
 	FilenamePrinter filenamePrinter;
-	app.add_option("--print-files", filenamePrinter.outputFile,
+	outputOptions.add_option("--print-files", filenamePrinter.outputFile,
 		"In List and Compare modes, print files and dirs which contain selected (List) and matching (Compare) clusters, respectively.\n"
 		"Warning: speed and memory hit!"
 	)
-		->group("Output options")
 		->expected(0, 0)
 		->default_str("-")
 		;
-	app.add_option("--print-files-to", filenamePrinter.outputFile, "Same as --print-files but allows you to specify a file.")
-		->group("Output options")
+	outputOptions.add_option("--print-files-to", filenamePrinter.outputFile, "Same as --print-files but allows you to specify a file.")
 		;
 
 
 	bool bReturnExitCode = false;
-	app.add_flag("--exit-code", bReturnExitCode,
+	outputOptions.add_flag("--exit-code", bReturnExitCode,
 		"Return non-zero exit code if there were differences (compare/rvw) or the selection had been non nil (list/copy). \
 		By default exit code is non-zero only on failures."
 		)
-		->group("Output options")
 		->capture_default_str()
 		;
 
 
 	bool progress = false;
-	app.add_flag("--progress", progress, "Display operations progress.")
-		->group("Output options")
-		->capture_default_str()
-		;
-
 	bool quiet = false;
-	app.add_flag("--quiet", quiet, "Only print warnings and above.")
-		->group("Output options")
-		->capture_default_str()
-		;
-
 	bool verbose = false;
-	app.add_flag("--verbose", verbose, "Detailed logging.")
-		->group("Output options")
+	bool debug = false;
+	outputOptions.add_flag("--progress", progress, "Display operations progress.")
 		->capture_default_str()
 		;
-
-	bool debug = false;
-	app.add_flag("--debug", debug, "Extra detailed logging.")
-		->group("Output options")
+	outputOptions.add_flag("--quiet", quiet, "Only print warnings and above.")
+		->capture_default_str()
+		;
+	outputOptions.add_flag("--verbose", verbose, "Detailed logging.")
+		->capture_default_str()
+		;
+	outputOptions.add_flag("--debug", debug, "Extra detailed logging.")
 		->capture_default_str()
 		;
 
@@ -689,6 +706,28 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	std::unique_ptr<MftScan> mftScanner {};
 
 
+	/*
+	Segment skipping.
+	On the scanner level we have skip/dirty a segment, and skip/dirty direct children.
+	We have to convert the rest to this format.
+	*/
+	DirectoryTreeLoader dirTree(src.mft);
+	if (mode == DdMode::MFT || mode == DdMode::AntiMFT) {
+		if (bAddStandardIncludes) {
+			includes.paths.push_back("System Volume Information");
+			includes.paths.push_back("$Extend");
+			includes.paths.push_back("Boot");
+		}
+
+		ScopedOp op("Resolving excludes/includes");
+		includes.setTree(&dirTree);
+		includes.resolve();
+		excludes.setTree(&dirTree);
+		excludes.resolve();
+	}
+	exit(-1);
+
+
 	if (action == DdAction::VerifyBitmap) {
 		ScopedOp op("Recalculating $Bitmap");
 		rebuildVolumeBitmap(src, src.mft, &srcUsed);
@@ -713,9 +752,10 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			mftScanner.reset(new MftDiff(src.mft, dest.mft));
 			auto& diff = *static_cast<MftDiff*>(mftScanner.get());
 			diff.markAllIndexClustersDirty = bMarkAllIndexClustersDirty;
-			diff.skipSegments(skipSegments);
-			diff.addDirtySegments(dirtySegments);
-			diff.addDirtySubtreeRoots(dirtySubtreeRoots);
+			diff.addSkipSegments(excludes.segments);
+			diff.addSkipRoots(excludes.segmentRoots);
+			diff.addDirtySegments(includes.segments);
+			diff.addDirtyRoots(includes.segmentRoots);
 			diff.filemapListDirty = filenamePrinter.active();
 			//AntiMFT requires listing those files that are NOT dirty according to our MFT scan, but MAY be dirty in the inversion.
 			//They shouldn't be, but that's what we're checking against.

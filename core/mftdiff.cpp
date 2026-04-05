@@ -251,10 +251,10 @@ MftDiff::MftDiff(Mft& mftSrc, Mft& mftDest)
 	This covers $Extend, but not System Volume Information (which is dynamic).
 	*/
 	for (int i = 0; i < 33; i++)
-		this->dirtySubtreeRoots.insert(i);
+		this->dirtyRoots.insert(i);
 }
 
-void MftDiff::skipSegments(const std::unordered_set<SegmentNumber>& segments)
+void MftDiff::addSkipSegments(const std::unordered_set<SegmentNumber>& segments)
 {
 	for (auto& segNo : segments)
 		this->filemap[segNo].skip = true;
@@ -266,9 +266,14 @@ void MftDiff::addDirtySegments(const std::unordered_set<SegmentNumber>& segments
 		this->filemap[segNo].dirty = true;
 }
 
-void MftDiff::addDirtySubtreeRoots(const std::unordered_set<SegmentNumber>& segments)
+void MftDiff::addSkipRoots(const std::unordered_set<SegmentNumber>& segments)
 {
-	this->dirtySubtreeRoots.insert(segments.begin(), segments.end());
+	this->skipRoots.insert(segments.begin(), segments.end());
+}
+
+void MftDiff::addDirtyRoots(const std::unordered_set<SegmentNumber>& segments)
+{
+	this->dirtyRoots.insert(segments.begin(), segments.end());
 }
 
 
@@ -375,6 +380,9 @@ void MftDiff::processValidSegment()
 	if (srcIt->BaseFileRecordSegment.mergedValue != 0) //If segment:sequence together is 0:0
 		baseSegmentNumber = srcIt->BaseFileRecordSegment.segmentNumber();
 
+
+	bool setSkipFlag = false;
+
 	//SequenceNumber не особо важен в этих целях.
 	//Можно было бы попытаться что-то сделать за одну итерацию атрибутов, но тогда пришлось бы сохранять отдельно все увиденные runs,
 	//т.к. в любой момент может выйти, что их всё-таки надо было в *какой-то* записи регистрировать.
@@ -391,13 +399,20 @@ void MftDiff::processValidSegment()
 			}
 			else if (attr.TypeCode == $FILE_NAME && !dirty) {
 				//Any time a file is included in a dir, it gets another $FILE_NAME with backreference to that dir
-				//Any backreference to a dirtySegmentRoot means the segment should be marked dirty.
 				AttrFilename attrFn{ &attr };
-				if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0
-					&& dirtySubtreeRoots.find(attrFn.fn->ParentDirectory.segmentNumber()) != dirtySubtreeRoots.end())
-				{
-					dirty = true;
-					diffStats.dirtyBecauseOfParent++;
+				if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0) {
+					auto parentSegmentNo = attrFn.fn->ParentDirectory.segmentNumber();
+					//Any backreference to a dirtyRoot means the segment should be marked dirty.
+					if (dirtyRoots.find(parentSegmentNo) != dirtyRoots.end())
+					{
+						dirty = true;
+						diffStats.dirtyBecauseOfParent++;
+					}
+					//Any backreference to a skipRoot means the (multi)segment should be skipped
+					if (skipRoots.find(parentSegmentNo) != skipRoots.end())
+					{
+						setSkipFlag = true;
+					}
 				}
 			}
 
@@ -409,6 +424,8 @@ void MftDiff::processValidSegment()
 
 	//Find appropriate permanent or temporary entry for this segment
 	FileEntry* segmentEntry = this->selectSegmentEntry();
+	if (setSkipFlag)
+		segmentEntry->skip = true;
 
 	//Process the attributes
 	this->processAttributes(segmentNo, segmentEntry, srcIt.segment);

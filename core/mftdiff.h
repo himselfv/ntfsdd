@@ -155,7 +155,7 @@ public:
 		Data leak risk.
 	Determine the segment numbers for your file with "fsutil file layout" or by listing changed files w/this tool.
 	*/
-	void skipSegments(const std::unordered_set<SegmentNumber>& segments);
+	void addSkipSegments(const std::unordered_set<SegmentNumber>& segments);
 
 	/*
 	These segments will always be marked as dirty (their data clusters will always get rcw/copied).
@@ -177,8 +177,10 @@ public:
 	Note: This works ONE LEVEL down. More levels would require pre-scanning the MFT to build the folder tree
 	which is slow.
 	*/
-	std::unordered_set<SegmentNumber> dirtySubtreeRoots {};
-	void addDirtySubtreeRoots(const std::unordered_set<SegmentNumber>& segments);
+	std::unordered_set<SegmentNumber> skipRoots {};
+	std::unordered_set<SegmentNumber> dirtyRoots {};
+	void addSkipRoots(const std::unordered_set<SegmentNumber>& segments);
+	void addDirtyRoots(const std::unordered_set<SegmentNumber>& segments);
 
 public:
 	MftDiff(Mft& mftSrc, Mft& mftDest);

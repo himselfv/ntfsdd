@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <string>
 #include <unordered_set>
+#include <cinttypes>
 #include "CLI11helper.h"
 #include "ntfs.h"
 #include "util.h"
@@ -188,6 +189,61 @@ void printSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 		printAttr(attr);
 }
 
+
+class DirIndexPrinter
+{
+protected:
+	DirectoryTreeLoader* dirTree = nullptr;
+	//Protect against duplicate names in the same dir (very common) + against recursion.
+	//Could have done the same on each dir's level (duplicates) + another set/stack for recursion, but whatever.
+	std::unordered_set<SegmentNumber> visited {};
+
+
+	void print(SegmentNumber segmentNo, const std::string& offset, bool recursive, bool force)
+	{
+		auto& dir = dirTree->get(segmentNo);
+		if (!force && dir.children.empty())
+			return; //A lot of them are files and not dirs so to avoid pointless repeats we cheat by skipping non-explicitly requested empty results
+
+		std::cout << std::endl;
+		std::cout << offset << "Segment #" << std::to_string(segmentNo);
+
+		std::cout << " \"" << dir.name << "\": " << std::endl;
+		for (auto& child : dir.children)
+			std::cout << offset << "  " << "#" << child.segmentNo << ": " << child.name << std::endl;
+
+		if (!recursive) return;
+		for (auto& child : dir.children) {
+			if (!visited.insert(child.segmentNo).second)
+				continue;
+			print(child.segmentNo, offset + " ", recursive, false);
+		}
+	}
+
+public:
+	void setTree(DirectoryTreeLoader* dirTree)
+	{
+		this->dirTree = dirTree;
+	}
+
+	void print(std::string path, bool recursive)
+	{
+		auto dirNo = strtoimax(path.c_str(), nullptr, 10);
+		if (dirNo == 0 && (path != "0")) {
+			dirNo = dirTree->traverse(path);
+			if (dirNo == -1) {
+				qWarning() << "Cannot resolve path " << path << std::endl;
+				return;
+			}
+		}
+
+		this->visited.clear();
+		this->print(dirNo, "", recursive, true);
+	}
+};
+
+
+
 int main2(int argc, char* argv[]) {
 	CLI::App app{};
 	app.name("ntfscmd");
@@ -253,8 +309,12 @@ int main2(int argc, char* argv[]) {
 		->delimiter(',');
 
 
-	std::unordered_set<SegmentNumber> listDirs{};
-	app.add_option("--list-dir", listDirs, "List directory contents for this segment.")
+	std::vector<std::string> listDirs{};
+	std::vector<std::string> listTrees{};
+	app.add_option("--list-dir", listDirs, "List directory contents for this segment/path.")
+		->group("Processing options")
+		->delimiter(',');
+	app.add_option("--list-tree", listTrees, "List directory contents for this segment/path and all subdirs.")
 		->group("Processing options")
 		->delimiter(',');
 
@@ -368,14 +428,13 @@ int main2(int argc, char* argv[]) {
 
 
 	DirectoryTreeLoader dirTree(src.mft);
-	for (auto& idx : listDirs) {
-		auto dir = dirTree.get(idx);
-		std::cout << std::endl << "Segment #" << std::to_string(idx) << " index:" << std::endl;
-		std::cout << "  Name: " << dir.name << std::endl;
-		for (auto& child : dir.children) {
-			std::cout << "  #" << child.segmentNo << ": " << child.name << std::endl;
-		}
-	}
+	DirIndexPrinter dirPrinter;
+	dirPrinter.setTree(&dirTree);
+	for (auto& path : listDirs)
+		dirPrinter.print(path, false);
+
+	for (auto& path : listTrees)
+		dirPrinter.print(path, true);
 
 	return 0;
 }
