@@ -155,10 +155,14 @@ bool AttributeCollectorProcessor::tryReadMore()
 	//If we have an incomplete final cluster, adjust the length so that the reader may rely on it blindly
 	//By this point we have read *something* and so surely we have read VCN==0, so we have that chunk, so we have sizes
 	int64_t remainingBytes = this->dataHeader.Form.Nonresident.FileSize - this->m_nextVcn*clusterSize;
-	if (remainingBytes < clusterSize)
+	if (remainingBytes < clusterSize) {
+		if (remainingBytes < 0) remainingBytes = 0; //Can happen if there's more than 1 cluster of slack
 		this->m_buf.resize(this->m_buf.size() - (clusterSize - remainingBytes));
-
-	this->m_nextVcn++;
+		//Skip reading the rest of the clusters
+		this->m_nextVcn = dataHeader.Form.Nonresident.HighestVcn;
+		this->m_vcnEof = true;
+	} else
+		this->m_nextVcn++;
 	return true;
 }
 
@@ -261,7 +265,7 @@ size_t AttributeListProcessor::tryReadEntry(byte* buf, size_t len)
 	if (len < sizeof(ATTRIBUTE_LIST_ENTRY))
 		return 0;
 
-	auto entry = reinterpret_cast<const ATTRIBUTE_LIST_ENTRY*>(m_pos);
+	auto entry = reinterpret_cast<const ATTRIBUTE_LIST_ENTRY*>(buf);
 
 	//Some say this can be 0 and it means EOF for the list, can't find this in the docs,
 	//let's just assert for now.
@@ -342,7 +346,7 @@ void MultiSegmentFileLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 			Whatever. Process everything that it throws at us in this regard.
 			*/
 			if (attr.FormCode == RESIDENT_FORM)
-				this->attrList.processData((char*)&attr + attr.Form.Resident.ValueOffset, attr.Form.Resident.ValueOffset);
+				this->attrList.processData((char*)&attr + attr.Form.Resident.ValueOffset, attr.Form.Resident.ValueLength);
 			else
 				this->attrList.addAttrChunk(&attr);
 		}
