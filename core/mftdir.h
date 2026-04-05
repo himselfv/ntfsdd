@@ -122,13 +122,9 @@ public:
 
 
 /*
-Чтение директорий:
-Нам в конечном счёте нужен класс на основе unordered_map<SegmentNo, DirData>.
-Когда вхождения нет, он читает соответствующий SegmentNo и любые упомянутые в нём.
-Последовательно он собирает две коллекции: AttributeListProcessor, INDEX_ROOT (всегда resident) и INDEX_ALLOCATION.
-INDEX_ROOT всегда resident, поэтому он встречается максимум (а для директорий ровно) один раз. И должен быть обработан
-целиком в один заход.
-INDEX_ALLOCATION нужно обрабатывать накопительно.
+Directory reading:
+Loads and caches directory entries. Resolves paths by splitting and following them dir by dir.
+Let's distinguish between assertion failures and user failures (no such file, not a dir etc). Let's return Windows error codes on this.
 */
 struct MftChildEntry
 {

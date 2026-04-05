@@ -581,22 +581,21 @@ SegmentIteratorBase::SegmentIteratorBase(Mft* mft, Flags flags)
 int64_t SegmentIteratorBase::selectMaxChunkSize()
 {
 	if (mft == nullptr) return 4096;
-	//Наш блок на чтение:
-	//- Однозначно кратен сегменту
-	//- Лучше, чтобы кратен кластеру, чтобы проще было решать вопросы чтения
-	//- Лучше всего ориентироваться на физический размер сектора диска, но SSD часто говорят его неправильно,
-	//  512, когда реальный размер 4096.
+	//Our reading chunk
+	//- Certainly a segment multiple
+	//- Best if a cluster multiple to simplify reading
+	//- Best to mind the physical sector size but SSDs often misreport it as 512 when it's 4096.
 	auto batchSize = mft->vol->volumeData().BytesPerFileRecordSegment;
-	//Сегменты могут быть больше одного кластера! Хоть это и редко делают на практике.
+	//Segments can be bigger than a cluster! Though rare in practice.
 	if (mft->vol->volumeData().BytesPerCluster > batchSize)
 		batchSize = mft->vol->volumeData().BytesPerCluster;
 	if (mft->vol->extendedVolumeData().BytesPerPhysicalSector > batchSize)
 		batchSize = mft->vol->extendedVolumeData().BytesPerPhysicalSector;
-	//В любом случае выравниваем на размер сегмента
+	//In any case align to a segment.
 	auto remainder = batchSize % mft->vol->volumeData().BytesPerFileRecordSegment;
 	if (remainder != 0)
 		batchSize = (batchSize + mft->vol->volumeData().BytesPerFileRecordSegment) - remainder;
-	//Умножаем!
+	//Multiply!
 	batchSize *= SEGMENTITERATOR_BATCHSIZE;
 	return batchSize;
 }
@@ -675,7 +674,7 @@ void SegmentIteratorBuffered::advance()
 {
 	if (remainingSegmentsInRun > 0) {
 		remainingSegmentsInRun--;
-		vrbn.QuadPart += mft->BytesPerFileSegment; //Отслеживаем всегда, т.к. нужно для нескольких механизмов сразу.
+		vrbn.QuadPart += mft->BytesPerFileSegment; //Track always, as this is needed for multiple things at once
 	}
 	else {
 		this->advanceRun();
@@ -696,10 +695,10 @@ void SegmentIteratorBuffered::readInt()
 	if (remainingBufferData >= mft->BytesPerFileSegment) {
 		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
 		remainingBufferData -= mft->BytesPerFileSegment;
-		//Не проверяем, что remainingBufferData делится на BytesPerFileSegment без остатка! Это должно быть верно.
+		//Not checking that remainingBufferData is a multiple of BytesPerFileSegment! This has to be true.
 	}
 	else {
-		//Читаем новый участок, в пределах доступного в этом run
+		//Reading new segment in the limits of available in this run
 		SegmentNumber segmentCount = (int64_t)(buffer.size()) / mft->BytesPerFileSegment;
 		if (segmentCount > remainingSegmentsInRun + 1) //1 уже вычтен перед вызовом этого чтения
 			segmentCount = remainingSegmentsInRun + 1;
@@ -789,7 +788,7 @@ void SegmentIteratorOverlapped::advance()
 {
 	auto BytesPerCluster = this->mft->vol->volumeData().BytesPerCluster;
 
-	//Часть 1. Запихиваем команды чтения в очередь
+	//Part 1. Push read requests to the queue
 	while (currentRun != nullptr) {
 		auto offset = currentRun->lcnStart + currentClusterInRun;
 		auto len = currentRun->len - currentClusterInRun;
@@ -808,21 +807,21 @@ void SegmentIteratorOverlapped::advance()
 #endif
 	}
 
-	//Часть 2. Дочитываем до конца текущий буфер.
+	//Part 2. Finish reading the current buffer.
 	if (remainingBufferData >= mft->BytesPerFileSegment) {
 		segment = (FILE_RECORD_SEGMENT_HEADER*)((uint8_t*)segment + mft->BytesPerFileSegment);
 		remainingBufferData -= mft->BytesPerFileSegment;
 #ifdef SEGMENTITERATOR_TRACKPOS
 		segmentAdvances++;
 #endif
-		//Не проверяем, что remainingBufferData делится на BytesPerFileSegment без остатка! Это должно быть верно.
+		//Not checking that remainingBufferData is a multiple of BytesPerFileSegment! This has to be true.
 		return;
 	}
 	assert(remainingBufferData == 0);
 
-	//Часть 3. Дожидаемся и вытаскиваем следующий запрос на чтение.
+	//Part 3. Wait for and extract the next queued read.
 
-	//Если у нас есть предыдущий буфер, то мы его достали из читалки и должны ей вернуть
+	//If we hold the previous buffer ptr then we took it from the reader and must return it.
 	if (segment != nullptr) {
 #ifdef SEGMENTITERATOR_TRACKPOS
 		readsPopped++;
