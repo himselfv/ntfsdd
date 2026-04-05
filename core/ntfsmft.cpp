@@ -159,8 +159,9 @@ bool AttributeCollectorProcessor::tryReadMore()
 		if (remainingBytes < 0) remainingBytes = 0; //Can happen if there's more than 1 cluster of slack
 		this->m_buf.resize(this->m_buf.size() - (clusterSize - remainingBytes));
 		//Skip reading the rest of the clusters
-		this->m_nextVcn = dataHeader.Form.Nonresident.HighestVcn;
-		this->m_vcnEof = true;
+		this->m_nextVcn = dataHeader.Form.Nonresident.HighestVcn+1;
+		//Do not set vcnEof here because we need to give another chance to the tryReadEntry().
+		//We'll set it when we're called again with no more VCNs => tryReadEntry had its time with the buffered remainder.
 	} else
 		this->m_nextVcn++;
 	return true;
