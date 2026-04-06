@@ -51,10 +51,10 @@ Volume::~Volume()
 
 
 /*
-Все функции, которые принимают overlapped, будут работать и если его не передать.
-Со внешним overlapped все они возвращают TRUE, если получили ERROR_IO_PENDING, то есть,
-если вы передали свой overlapped, то должны при TRUE всегда делать GetOverlappedResult.
-Это не идеально, если функция выполнилась сразу же, но так проще для вызывающих.
+All functions that accept overlapped will work with nullptr too.
+With an external overlapped they all return TRUE on receiving ERROR_IO_PENDING,
+so if you pass your own overlapped, on TRUE you should GetOverlappedResult.
+Extra chores on immediate completion but this way it's easier for the callers.
 */
 
 BOOL Volume::ioctl(_In_ DWORD dwIoControlCode,

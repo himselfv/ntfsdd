@@ -3,23 +3,23 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.
 
 ## Description
 Given a source NTFS volume and a target clone of it, uses NTFS $Bitmap or compares the MFTs to generate a list of potentially changed clusters.
-Compares these clusters between the source and the destination and copies the changes to the destination.
+Compares these clusters on the source and the destination and copies the changes to the destination.
 
-AKA in some apps: Rapid Delta Clone. (Only with read-compare-write!)
+AKA in some apps: Rapid Delta Clone. (But this one is with read-compare-write!)
 
 The goals:
 
-* to minimize the number of clusters to be checked by using progressively more sophisticated ways of selecting them
+* to minimize the number of clusters checked by using progressively more sophisticated ways of selecting them
 * to minimize writes, preserving SSDs.
 
 Can be used for:
 
-* Cloning/imaging: ntfsdd copy all
-* Volume comparison: ntfsdd compare all/compare bitmap
-* Smart updates: ntfsdd copy mft (for HDDs)/ntfsdd rcw mft (for SSDs).
+* Cloning/imaging: ``ntfsdd copy --select all``
+* Volume comparison: ``ntfsdd compare --select all``/``compare --select bitmap``
+* Smart updates: ``ntfsdd copy --select mft`` (for HDDs)/``ntfsdd rcw --select mft`` (for SSDs).
 * Accidental HDD wipes.
 
-In general you have to run this as Administrator. But start without that and see if your goals are satisfied.
+In general you have to run this as Administrator. But start without that and see if your goals are achievable.
 
 
 
@@ -42,7 +42,7 @@ Selecting the clusters (``--select``):
 : Clusters referenced in any of the MFT segments (~= files/dirs) which are different between the source and the destination. \
   Basically, all clusters referenced by the files that could have changed.
 
-MFT is the most narrow and it's recommended unless it's not working for you somehow. All/Bitmap are useful for initial cloning.
+MFT is the most narrow mode and it's recommended unless it's not working for you somehow. All/Bitmap are useful for initial cloning/occasional verification.
 
 The action to perform (``--action``):
 
@@ -69,32 +69,32 @@ SSDs can only sustain a limited number of writes through their lifetime. That nu
 ### Examples:
 
 ```
-ntfsdd copy all --source SOURCE --dest DEST
+ntfsdd copy --select all --source SOURCE --dest DEST
 ```
 Blindly clones SOURCE (volume, file, vss) to DEST (volume, file).
 
 ```
-ntfsdd copy bitmap --source SOURCE --dest DEST
+ntfsdd copy --select bitmap --source SOURCE --dest DEST
 ```
 Same but copies only the clusters used by the filesystem.
 
 ```
-ntfsdd copy mft --source SOURCE --dest DEST
+ntfsdd copy --select mft --source SOURCE --dest DEST
 ```
 Compares the MFTs and copies potentially changed clusters blindly (useful for HDDs).
 
 ```
-ntfsdd rvw mft --source SOURCE --dest DEST
+ntfsdd rvw --select mft --source SOURCE --dest DEST
 ```
 Compares the MFTs, then compares all the potentially changed clusters and copies the changes (useful for SSDs).
 
 ```
-ntfsdd list all/bitmap/mft
+ntfsdd list --select all/bitmap/mft
 ```
 Prints the cluster numbers matching given selection criteria.
 
 ```
-ntfsdd compare all/bitmap/mft
+ntfsdd compare --select all/bitmap/mft
 ```
 Compares the clusters matching the selection criteria and prints the cluster numbers for the changed clusters.
 
@@ -122,7 +122,7 @@ type nul >filename.img
 ```
 
 Note that "```copy all```" will produce a file equivalent to the source in size. "```copy bitmap```" might produce a smaller file as final empty unused sectors will not be copied. This may confuse some tools, idk. You'll also likely not be able to "```copy all```" from that file and will have to restore it with "```copy bitmap```". \
-To prevent this, pre-fill the file with zeroes.
+To prevent this, pre-fill the file with zeroes or do one ``copy all``.
 
 #### HOW TO CREATE SMALL NTFS VOLUMES IN FILES W/VARIOUS PARAMS:
 * Disk management MMC.
@@ -192,6 +192,9 @@ WARNING: Security risk. Data from other files will leak into these. Might not ma
 * Retrim regularly to lower the chance, but it's never zero.
 
 * Manually ```del``` the file on the destination after cloning if you care.
+
+
+WARNING: Havoc risk. When you skip a dir alone, its index is skipped. The files are still copied (unless you skip them too). The files contain backreferences to dirs including them. So you now have incorrect backreferences. PLUS incorrect obsolete forward-references. Or maybe even garbage. Perhaps you shouldn't skip dirs!
 
 
 In the same, but safer, way you can force the file clusters to ALWAYS be selected with ``--include-``. Internally this is used to handle driver magic folders such as System Volume Information. This has absolutely NO side effects except for more data to rcw/copy each time.

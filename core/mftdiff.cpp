@@ -203,26 +203,26 @@ void MftScan::processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry
 
 
 /*
-Получает указатели на два MFT, source и dest. Возвращает две карты кластеров:
-1. Все использованные кластеры по мнению первой MFT (мнение второй - устарело).
-2. Все кластеры, которые необходимо проверить на изменения.
+Receives pointers to two MFTs, source and dest. Returns two cluster maps:
+1. All used clusters according to the source MFT (dest MFT's opinion is obsolete).
+2. All clusters that have to be checked for changes (dirty).
 
-Проходит по первой MFT, отслеживая переключения между runs и номер текущего кластера.
-Поддерживает параллельно итератор второй MFT, который должен находиться точно в том же месте.
-Надо убедиться, что их список runs идентичен с точностью до возможных дополнительных runs с левой стороны.
-Если это не так, операция прерывается и диски несовместимы.
+Walks the first MFT tracking run changes and current cluster number.
 
-Иначе двигается сегмент за сегментом, сравнивая их побайтово. Неидентичные сегменты считаются dirty.
-Если dirty-сегмент отдельностоящий, сразу же вносим все его кластеры non-resident атрибутов в карту dirty.
+Keeps the second MFT's iterator in sync, always to be in exactly the same place.
+We have to verify that their run lists are identical up to possible additional runs on the left side.
+If this is not true, we abort and the volumes are incompatible.
 
-Иначе, если у него есть baseSegment ИЛИ атрибут ATTRIBUTE_LIST, то регистрируем его кластеры в учётной записи,
-связанной с его baseSegment (с ним самим, если он не имеет baseSegment, но содержит ATTRIBUTE_LIST).
-Регистрируем их в любом случае, но если наш сегмент dirty, то взводим dirty всей записи.
+Otherwise advances segment by segment, doing binary comparisons. Non-identical segments are dirty.
 
-После достижения правой стороной финиша (== end()) левая сторона продолжается до её end() заведомо в режиме dirty.
+If a dirty segment is standalone: Add all their non-resident attribute clusters to a dirty map immediately.
+Otherwise (if it has baseSegment or ATTRIBUTE_LIST), register its clusters in its accounting entry
+associated with its baseSegment (or itself, if it has no baseSegment but contains ATTRIBUTE_LIST).
+Register anyways, but if this segment is dirty then raise dirty there.
 
-После завершения сканирования обеих сторон проходим сохранённые учётные записи и отмечаем все кластеры в тех из них,
-которые помечены как dirty.
+After the right side reaches end(), the left continues to its end() with the rest treated as dirty.
+
+After both sides finish go over accounting records and map as dirty all clusters in the records marked as dirty.
 */
 MftDiff::MftDiff(Mft& mftSrc, Mft& mftDest)
 	: MftScan(mftSrc), mftDest(mftDest)
@@ -383,11 +383,11 @@ void MftDiff::processValidSegment()
 
 	bool setSkipFlag = false;
 
-	//SequenceNumber не особо важен в этих целях.
-	//Можно было бы попытаться что-то сделать за одну итерацию атрибутов, но тогда пришлось бы сохранять отдельно все увиденные runs,
-	//т.к. в любой момент может выйти, что их всё-таки надо было в *какой-то* записи регистрировать.
-	//Пробежать лишний раз по атрибутам дешевле этих операций с памятью.
-	//Кроме того, нам нужно предварительно собрать и ещё кое-какую информацию.
+	//SequenceNumber is not too important here.
+	//We could've tried to manage somehow in one attribute iteration but then we would have to save all the runs we've seen,
+	//in case it later turns out we *had* to register them somewhere.
+	//Parsing the attrs twice is cheaper these memory ops.
+	//We need to gather some other information too.
 	if (baseSegmentNumber < 0)
 		for (auto& attr : AttributeIterator(srcIt.segment))
 			if (attr.TypeCode == $ATTRIBUTE_LIST) {

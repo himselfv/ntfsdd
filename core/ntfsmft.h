@@ -365,8 +365,8 @@ struct SegmentIteratorOverlapped : public SegmentIteratorBase {
 	SegmentIteratorOverlapped& operator=(SegmentIteratorOverlapped&& other);
 
 	/*
-	В этом итераторе итерация по кластерам runs (постановка на чтение) и указатель на прочитанные данные независимы.
-	currentRun установлен с самого начала и до исчерпания входных кластеров. После этого он нулевой. До этого он всегда указывает на следующий кластер для чтения.
+	In this iterator iteration over runs (read queueing) and the pointer to the processed data are independent.
+	currentRun is set from the start and until input clusters are exhausted. After that it's zero. Before that it always points to the next cluster to read.
 	*/
 	int64_t currentClusterInRun = 0;
 	void advanceRun();
