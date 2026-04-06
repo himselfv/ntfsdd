@@ -214,6 +214,7 @@ DirEntryLoader::DirEntryLoader(Mft& mft)
 void DirEntryLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 {
 	MultiSegmentFileLoader::loadSegment(segment);
+	this->m_bitmapLoader.advance(); //In case it was non-resident
 	this->advance();
 }
 

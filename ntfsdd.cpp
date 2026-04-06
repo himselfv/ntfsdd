@@ -462,11 +462,11 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	SegmentInclusionOptions includes;
 	SegmentInclusionOptions excludes;
 	bool bAddStandardIncludes = true;
-	skipOptions.add_option("--exclude-segment, --skip-segment", excludes.segments, "Skip MFT entries with these numbers.")
+	skipOptions.add_option("--exclude-segments, --skip-segments", excludes.segments, "Skip MFT entries with these numbers.")
 		->delimiter(',');
 	skipOptions.add_option("--exclude-subtree", excludes.segmentRoots, "Skip MFT entries with these numbers and all their children.")
 		->delimiter(',');
-	skipOptions.add_option("--include-segment, --dirty-segment", includes.segments, "Always consider these MFT entries dirty.")
+	skipOptions.add_option("--include-segments, --dirty-segments", includes.segments, "Always consider these MFT entries dirty.")
 		->delimiter(',');
 	skipOptions.add_option("--include-subtree, --dirty-subtree", includes.segmentRoots, "Always consider these MFT entries dirty with their children.")
 		->delimiter(',');
@@ -725,7 +725,6 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		excludes.setTree(&dirTree);
 		excludes.resolve();
 	}
-	exit(-1);
 
 
 	if (action == DdAction::VerifyBitmap) {
