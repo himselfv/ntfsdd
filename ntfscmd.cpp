@@ -323,6 +323,12 @@ int main2(int argc, char* argv[]) {
 		;
 
 
+	std::unordered_set<SegmentNumber> getSegmentLcns{};
+	app.add_option("--get-segment-lcn", getSegmentLcns, "Print LCN of the cluster where this segment is hosted.")
+		->group("Processing options")
+		->delimiter(',');
+
+
 	std::unordered_set<SegmentNumber> dumpSegments{};
 	app.add_option("--dump-segment", dumpSegments, "Dump MFT entries in hex.")
 		->group("Processing options")
@@ -433,6 +439,11 @@ int main2(int argc, char* argv[]) {
 	NtfsBitmapFile srcBitmap(&src, src.mft);
 
 	BitmapBuf srcUsed;
+
+
+	for (auto& segmentNo : getSegmentLcns)
+		std::cout << "Segment #" << segmentNo << ": LCN=" << src.mft->getLcn(segmentNo * src.volumeData().BytesPerFileRecordSegment / src.volumeData().BytesPerCluster) << std::endl;
+
 
 	std::vector<byte> buf;
 	buf.resize(src.mft->BytesPerFileSegment);
