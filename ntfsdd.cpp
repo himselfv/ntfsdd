@@ -206,10 +206,19 @@ bool verifyMountPoints(const std::string& volumePath, bool printMountPoints, boo
 
 
 //Volume + its MFT.
+
+
 class Volume2 : public Volume {
 public:
-	Mft mft = { this };
+	Mft* mft = nullptr;
 	using Volume::Volume;
+	~Volume2() {
+		if (mft)
+			delete mft;
+	}
+	void initMft() {
+		this->mft = new Mft(this);
+	}
 };
 
 void compareVolumeParams(Volume& a, Volume& b, bool safety_override)
@@ -658,15 +667,17 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	// Open and scan MFT
 	qInfo() << "Loading MFT structures..." << std::endl;
-	src.mft.load();
+	src.initMft();
+	src.mft->load();
+	dest.initMft();
 	if (!bBlankTarget)
-		dest.mft.load();
+		dest.mft->load();
 	else
-		dest.mft.loadMinimal();
+		dest.mft->loadMinimal();
 
 	// Always load the stored $Bitmap. This is fast, and we need it for a lot of things.
 	qVerbose() << "Loading stored bitmap..." << std::endl;
-	NtfsBitmapFile srcBitmap(&src, &src.mft);
+	NtfsBitmapFile srcBitmap(&src, src.mft);
 	{
 		MeasureTime tm("$Bitmap processing");
 		auto srcBitCount = srcBitmap.asBitmap().bitCount();
@@ -677,7 +688,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	std::unique_ptr<NtfsBitmapFile> destBitmap{ nullptr };
 	if (!bBlankTarget) {
 		MeasureTime tm("Dest.$Bitmap processing");
-		destBitmap.reset(new NtfsBitmapFile(&dest, &dest.mft));
+		destBitmap.reset(new NtfsBitmapFile(&dest, dest.mft));
 		tm.print("Dest.$Bitmap loading");
 		auto bitCount = destBitmap->asBitmap().bitCount();
 		qVerbose() << "Dest.$Bitmap: total=" << srcUnits.clusters(srcBitmap.totalClusters())
@@ -686,9 +697,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	}
 
 	qInfo() << "Verifying MFT layouts..." << std::endl;
-	verifyMftLayout(src, src.mft, srcBitmap.buf);
+	verifyMftLayout(src, *src.mft, srcBitmap.buf);
 	if (!bBlankTarget)
-		verifyMftLayout(dest, dest.mft, nullptr);
+		verifyMftLayout(dest, *dest.mft, nullptr);
 
 	BitmapBuf srcUsed;
 	CandidateClusterMap srcSelect;
@@ -711,7 +722,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	On the scanner level we have skip/dirty a segment, and skip/dirty direct children.
 	We have to convert the rest to this format.
 	*/
-	DirectoryTreeLoader dirTree(src.mft);
+	DirectoryTreeLoader dirTree(*src.mft);
 	if (mode == DdMode::MFT || mode == DdMode::AntiMFT) {
 		if (bAddStandardIncludes) {
 			includes.paths.push_back("System Volume Information");
@@ -729,7 +740,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 
 	if (action == DdAction::VerifyBitmap) {
 		ScopedOp op("Recalculating $Bitmap");
-		rebuildVolumeBitmap(src, src.mft, &srcUsed);
+		rebuildVolumeBitmap(src, *src.mft, &srcUsed);
 	}
 	if (action == DdAction::Copy || action == DdAction::List || action == DdAction::Compare || action == DdAction::Rcw) {
 		ScopedOp op("Building file table bitmaps");
@@ -748,7 +759,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		case DdMode::AntiMFT:
 		case DdMode::MFT:
 		{
-			mftScanner.reset(new MftDiff(src.mft, dest.mft));
+			mftScanner.reset(new MftDiff(*src.mft, *dest.mft));
 			auto& diff = *static_cast<MftDiff*>(mftScanner.get());
 			diff.markAllIndexClustersDirty = bMarkAllIndexClustersDirty;
 			diff.addSkipSegments(excludes.segments);
@@ -772,7 +783,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			We'll have to disable it.
 		*/
 		if (filenamePrinter.active() && !mftScanner) {
-			mftScanner.reset(new MftScan(src.mft));
+			mftScanner.reset(new MftScan(*src.mft));
 			mftScanner->filemapListAll = true;
 		}
 

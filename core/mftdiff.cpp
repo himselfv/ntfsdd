@@ -243,15 +243,18 @@ MftDiff::MftDiff(Mft& mftSrc, Mft& mftDest)
 	/*
 	Other such files don't have preallocated numbers. The ones I've observed:
 		System Volume Information\$CBT2
+        Boot\something
 	The ones I've read about:
 		$Extend\$UsnJrnl
+	$Extend is always 11, but System Volume Information is dynamic.
 
-	At the moment I have only a partial system to handle this:
-	We will add segmentNumbers of some dirs and all files under these dirs will be marked dirty.
-	This covers $Extend, but not System Volume Information (which is dynamic).
+	We provide a way to mark certain dirs as dirty roots. Makes their direct children dirty.
+	The callers have to resolve standard paths, traverse the subdirs and add all of them here.
+
+	We'll add $Extend here manually since we know its ID, but it's atop-gap: subdirectories are not covered.
 	*/
-	for (int i = 0; i < 33; i++)
-		this->dirtyRoots.insert(i);
+	this->dirtyRoots.insert(11);
+	//Do not add 5! That's the volume root, large files there might be marked dirty for no good reason.
 }
 
 void MftDiff::addSkipSegments(const std::unordered_set<SegmentNumber>& segments)

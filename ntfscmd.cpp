@@ -22,8 +22,15 @@
 //Volume + its MFT.
 class Volume2 : public Volume {
 public:
-	Mft mft = { this };
+	Mft* mft = nullptr;
 	using Volume::Volume;
+	~Volume2() {
+		if (mft)
+			delete mft;
+	}
+	void initMft() {
+		this->mft = new Mft(this);
+	}
 };
 
 void dumpRaw(void* data, size_t sz)
@@ -419,17 +426,18 @@ int main2(int argc, char* argv[]) {
 
 	// Open and scan MFT
 	qInfo() << "Loading MFT structures..." << std::endl;
-	src.mft.load();
+	src.initMft();
+	src.mft->load();
 
 	qVerbose() << "Loading stored bitmap..." << std::endl;
-	NtfsBitmapFile srcBitmap(&src, &src.mft);
+	NtfsBitmapFile srcBitmap(&src, src.mft);
 
 	BitmapBuf srcUsed;
 
 	std::vector<byte> buf;
-	buf.resize(src.mft.BytesPerFileSegment);
+	buf.resize(src.mft->BytesPerFileSegment);
 	for (auto& idx : dumpSegments) {
-		src.mft.readSegmentByIndex(idx, (FILE_RECORD_SEGMENT_HEADER*)buf.data());
+		src.mft->readSegmentByIndex(idx, (FILE_RECORD_SEGMENT_HEADER*)buf.data());
 		std::cout << std::endl << "Segment #" << std::to_string(idx) << " dump:" << std::endl;
 		if (bDumpRaw)
 			dumpRaw(buf.data(), buf.size());
@@ -454,16 +462,16 @@ int main2(int argc, char* argv[]) {
 
 	SegmentPrinter segPrinter(src);
 
-	buf.resize(src.mft.BytesPerFileSegment);
+	buf.resize(src.mft->BytesPerFileSegment);
 	for (auto& idx : printSegments) {
 		auto segment = (FILE_RECORD_SEGMENT_HEADER*)buf.data();
-		src.mft.readSegmentByIndex(idx, segment);
+		src.mft->readSegmentByIndex(idx, segment);
 		std::cout << std::endl << "Segment #" << std::to_string(idx) << ":" << std::endl;
 		segPrinter.printSegment(segment);
 	}
 
 
-	DirectoryTreeLoader dirTree(src.mft);
+	DirectoryTreeLoader dirTree(*src.mft);
 	DirIndexPrinter dirPrinter;
 	dirPrinter.setTree(&dirTree);
 	for (auto& path : listDirs)
