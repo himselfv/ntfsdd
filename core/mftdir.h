@@ -79,8 +79,6 @@ $BITMAP can be non-resident so we need another collector.
 In general, we cannot start processing INDEX_ALLOCATION until we have compiled BITMAP.
 We could track the VCN map loading extent for the BITMAP and allow INDEX_ALLOCATION
 processing accordingly, but it's a bother.
-
-I'll place another 
 */
 struct DirIndexEntry {
 	SegmentNumber segmentNo;
@@ -113,6 +111,10 @@ public:
 class DirEntryLoader : public MultiSegmentFileLoader, public DirIndexProcessor
 {
 public:
+	//The entry we've been tasked with loading is indeed marked as a directory.
+	//Available after the base segment is processed.
+	//You can also check if it IN FACT had INDEX_ROOT by checking DirIndexProcessor::haveIndexRoot().
+	bool isDir = false;
 	FilenameEntry filename;
 	DirEntryLoader(Mft& mft);
 	virtual void loadSegment(FILE_RECORD_SEGMENT_HEADER* segment) override;
@@ -126,16 +128,11 @@ Directory reading:
 Loads and caches directory entries. Resolves paths by splitting and following them dir by dir.
 Let's distinguish between assertion failures and user failures (no such file, not a dir etc). Let's return Windows error codes on this.
 */
-struct MftChildEntry
-{
-	SegmentNumber segmentNo;
-	std::string name;
-};
 struct MftDirEntry
 {
 	SegmentNumber segmentNo;
 	std::string name;
-	std::vector<MftChildEntry> children;
+	std::vector<DirIndexEntry> children;
 };
 class DirectoryTreeLoader
 {

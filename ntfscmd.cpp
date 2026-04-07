@@ -95,99 +95,132 @@ std::string fileAttributesToString(ULONG attrs)
 	return result;
 }
 
-void printFilenameAttr(ATTRIBUTE_RECORD_HEADER& attr)
+
+class SegmentPrinter
 {
-	AttrFilename fn{ &attr };
-	std::cout << "  Filename: " << AttrFilename(&attr).name() << std::endl;
-	std::cout << "  Parent dir: " << segmentRefToStr(fn.fn->ParentDirectory) << std::endl;
-	std::cout << "  Flags: " << (USHORT)(fn.fn->Flags);
-	if (fn.fn->Flags & FILE_NAME_NTFS) std::cout << " NTFS";
-	if (fn.fn->Flags & FILE_NAME_DOS) std::cout << " DOS";
-	std::cout << std::endl;
-}
+protected:
+	Volume2& vol;
+public:
+	SegmentPrinter(Volume2& vol)
+		: vol(vol)
+	{}
 
-void printStandardInformationAttr(ATTRIBUTE_RECORD_HEADER& attr)
-{
-	int64_t size = attr.Form.Resident.ValueLength;
-	auto& sa = *((STANDARD_INFORMATION*)attr.ResidentValuePtr());
-
-	std::cout << "  Creation: " << sa.CreationTime;
-	std::cout << " LastMod: " << sa.LastModificationTime;
-	std::cout << " LastChange: " << sa.LastChangeTime;
-	std::cout << " LastAcc: " << sa.LastAccessTime;
-	std::cout << std::endl;
-
-	std::cout << "  FileAttrs: " << fileAttributesToString(sa.FileAttributes) << std::endl;
-	std::cout << "  MaximumVersions: " << sa.MaximumVersions;
-	std::cout << " VersionNumber: " << sa.VersionNumber << std::endl;
-
-	if (size >= offsetof(STANDARD_INFORMATION, SecurityId) + sizeof(STANDARD_INFORMATION::SecurityId)) {
-		std::cout << "  ClassId: " << sa.ClassId
-			<< " OwnerId: " << sa.OwnerId
-			<< " SecurityId: " << sa.SecurityId
-			<< std::endl;
+	void printFilenameAttr(ATTRIBUTE_RECORD_HEADER& attr)
+	{
+		AttrFilename fn{ &attr };
+		std::cout << "  Filename: " << AttrFilename(&attr).name() << std::endl;
+		std::cout << "  Parent dir: " << segmentRefToStr(fn.fn->ParentDirectory) << std::endl;
+		std::cout << "  Flags: " << (USHORT)(fn.fn->Flags);
+		if (fn.fn->Flags & FILE_NAME_NTFS) std::cout << " NTFS";
+		if (fn.fn->Flags & FILE_NAME_DOS) std::cout << " DOS";
+		std::cout << std::endl;
 	}
-	if (size >= offsetof(STANDARD_INFORMATION, QuotaCharged) + sizeof(STANDARD_INFORMATION::QuotaCharged)) {
-		std::cout << "  QuotaCharged: " << sa.QuotaCharged << std::endl;
+
+	void printStandardInformationAttr(ATTRIBUTE_RECORD_HEADER& attr)
+	{
+		int64_t size = attr.Form.Resident.ValueLength;
+		auto& sa = *((STANDARD_INFORMATION*)attr.ResidentValuePtr());
+
+		std::cout << "  Creation: " << sa.CreationTime;
+		std::cout << " LastMod: " << sa.LastModificationTime;
+		std::cout << " LastChange: " << sa.LastChangeTime;
+		std::cout << " LastAcc: " << sa.LastAccessTime;
+		std::cout << std::endl;
+
+		std::cout << "  FileAttrs: " << fileAttributesToString(sa.FileAttributes) << std::endl;
+		std::cout << "  MaximumVersions: " << sa.MaximumVersions;
+		std::cout << " VersionNumber: " << sa.VersionNumber << std::endl;
+
+		if (size >= offsetof(STANDARD_INFORMATION, SecurityId) + sizeof(STANDARD_INFORMATION::SecurityId)) {
+			std::cout << "  ClassId: " << sa.ClassId
+				<< " OwnerId: " << sa.OwnerId
+				<< " SecurityId: " << sa.SecurityId
+				<< std::endl;
+		}
+		if (size >= offsetof(STANDARD_INFORMATION, QuotaCharged) + sizeof(STANDARD_INFORMATION::QuotaCharged)) {
+			std::cout << "  QuotaCharged: " << sa.QuotaCharged << std::endl;
+		}
+		if (size >= offsetof(STANDARD_INFORMATION, Usn) + sizeof(STANDARD_INFORMATION::Usn)) {
+			std::cout << "  Usn: " << sa.Usn << std::endl;
+		}
 	}
-	if (size >= offsetof(STANDARD_INFORMATION, Usn) + sizeof(STANDARD_INFORMATION::Usn)) {
-		std::cout << "  Usn: " << sa.Usn << std::endl;
+
+	void printAttributeListAttr(ATTRIBUTE_RECORD_HEADER& attr)
+	{
+		AttributeListProcessor proc(&vol);
+
+		if (attr.FormCode == RESIDENT_FORM)
+			proc.processResidentAttr(attr);
+		else {
+			if (attr.Form.Nonresident.LowestVcn != 0) {
+				std::cout << "WARNING: $ATTRIBUTE_LIST chunk with LowestVcn!=0. This is very rare. In this simplified tool we cannot parse this." << std::endl;
+				//We try to in the main ntfsdd though.
+				return;
+			}
+			proc.addAttrChunk(&attr);
+			proc.advance();
+		}
+		for (auto& entry : proc.segments)
+			std::cout << "  Segment: " << entry << std::endl;
+		if (!proc.eof())
+			std::cout << "WARNING: Unprocessed data left in $ATTRIBUTE_LIST. Likely to be chunked $ATTRIBUTE_LIST. This is very rare. In this simplified tool we cannot parse this." << std::endl;
 	}
-}
 
-void printAttr(ATTRIBUTE_RECORD_HEADER& attr)
-{
-	std::cout << attrTypeToStr(attr.TypeCode) << " len=" << attr.RecordLength << " flags=" << attr.Flags;
-	if (attr.Flags & ATTRIBUTE_FLAG_COMPRESSION_MASK) std::cout << " COMPRESSION_MASK";
-	if (attr.Flags & ATTRIBUTE_FLAG_SPARSE) std::cout << " SPARSE";
-	if (attr.Flags & ATTRIBUTE_FLAG_ENCRYPTED) std::cout << " ENCRYPTED";
-	std::cout << std::endl;
-	std::cout << "  Instance: " << attr.Instance << std::endl;
-	std::cout << "  Name: " << attrNameStr(&attr) << std::endl;
-	if (attr.FormCode == RESIDENT_FORM) {
-		std::cout << "  Resident: Data=" << attr.Form.Resident.ValueOffset << "+" << attr.Form.Resident.ValueLength << ", Flags=" << ((USHORT)attr.Form.Resident.ResidentFlags) << std::endl;
-		//Dump extended info on some attributes
-		if (attr.TypeCode == $FILE_NAME)
-			printFilenameAttr(attr);
-		if (attr.TypeCode == $STANDARD_INFORMATION)
-			printStandardInformationAttr(attr);
+	void printAttr(ATTRIBUTE_RECORD_HEADER& attr)
+	{
+		std::cout << attrTypeToStr(attr.TypeCode) << " len=" << attr.RecordLength << " flags=" << attr.Flags;
+		if (attr.Flags & ATTRIBUTE_FLAG_COMPRESSION_MASK) std::cout << " COMPRESSION_MASK";
+		if (attr.Flags & ATTRIBUTE_FLAG_SPARSE) std::cout << " SPARSE";
+		if (attr.Flags & ATTRIBUTE_FLAG_ENCRYPTED) std::cout << " ENCRYPTED";
+		std::cout << std::endl;
+		std::cout << "  Instance: " << attr.Instance << std::endl;
+		std::cout << "  Name: " << attrNameStr(&attr) << std::endl;
+		if (attr.FormCode == RESIDENT_FORM) {
+			std::cout << "  Resident: Data=" << attr.Form.Resident.ValueOffset << "+" << attr.Form.Resident.ValueLength << ", Flags=" << ((USHORT)attr.Form.Resident.ResidentFlags) << std::endl;
+			//Dump extended info on some attributes
+			if (attr.TypeCode == $FILE_NAME)
+				printFilenameAttr(attr);
+			if (attr.TypeCode == $STANDARD_INFORMATION)
+				printStandardInformationAttr(attr);
+			if (attr.TypeCode == $ATTRIBUTE_LIST)
+				printAttributeListAttr(attr);
+		}
+		else if (attr.FormCode == NONRESIDENT_FORM) {
+			std::cout << "  Non-resident: VCN=" << attr.Form.Nonresident.LowestVcn << "-" << attr.Form.Nonresident.HighestVcn << std::endl;
+			std::cout << "  Size=" << attr.Form.Nonresident.FileSize << ", Valid=" << attr.Form.Nonresident.ValidDataLength
+				<< ", Alloc=" << attr.Form.Nonresident.AllocatedLength << ", Total=" << attr.Form.Nonresident.TotalAllocated
+				<< std::endl
+				;
+			for (auto& run : DataRunIterator(&attr))
+				std::cout << "    Run: " << run.offset << "+" << run.length << std::endl;
+		}
+		else {
+			std::cout << "  UNKNOWN FORM: " << attr.FormCode << std::endl;
+		}
 	}
-	else if (attr.FormCode == NONRESIDENT_FORM) {
-		std::cout << "  Non-resident: VCN=" << attr.Form.Nonresident.LowestVcn << "-" << attr.Form.Nonresident.HighestVcn << std::endl;
-		std::cout << "  Size=" << attr.Form.Nonresident.FileSize << ", Valid=" << attr.Form.Nonresident.ValidDataLength
-			<< ", Alloc=" << attr.Form.Nonresident.AllocatedLength << ", Total=" << attr.Form.Nonresident.TotalAllocated
-			<< std::endl
-			;
-		for (auto& run : DataRunIterator(&attr))
-			std::cout << "    Run: " << run.offset << "+" << run.length << std::endl;
+
+	void printSegment(FILE_RECORD_SEGMENT_HEADER* segment)
+	{
+		std::cout << segment->MultiSectorHeader.Signature;
+		std::cout << ", BaseSegment: " << segmentRefToStr(segment->BaseFileRecordSegment);
+		std::cout << ", LSN: " << segment->Lsn << std::endl;
+
+		std::cout << "SequenceNumber: " << segment->SequenceNumber << " ReferenceCount: " << segment->ReferenceCount << std::endl;
+
+		std::cout << "Flags: " << std::to_string(segment->Flags);
+		if (segment->Flags & FILE_RECORD_SEGMENT_IN_USE) std::cout << " IN_USE";
+		if (segment->Flags & FILE_FILE_NAME_INDEX_PRESENT) std::cout << " FILE_NAME_INDEX_PRESENT";
+		std::cout << std::endl;
+
+		std::cout << "Update sequence: offset=" << segment->MultiSectorHeader.UpdateSequenceArrayOffset
+			<< ", size=" << segment->MultiSectorHeader.UpdateSequenceArraySize << std::endl;
+		std::cout << "Bytes: available=" << segment->BytesAvailable << ", firstFree=" << segment->FirstFreeByte << std::endl;
+		std::cout << "Attrs: firstOffset=" << segment->FirstAttributeOffset << ", nextInst=" << segment->NextAttributeInstance << std::endl;
+
+		for (ATTRIBUTE_RECORD_HEADER& attr : AttributeIterator(segment))
+			printAttr(attr);
 	}
-	else {
-		std::cout << "  UNKNOWN FORM: " << attr.FormCode << std::endl;
-	}
-}
-
-void printSegment(FILE_RECORD_SEGMENT_HEADER* segment)
-{
-
-	std::cout << segment->MultiSectorHeader.Signature;
-	std::cout << ", BaseSegment: " << segmentRefToStr(segment->BaseFileRecordSegment);
-	std::cout << ", LSN: " << segment->Lsn << std::endl;
-
-	std::cout << "SequenceNumber: " << segment->SequenceNumber << " ReferenceCount: " << segment->ReferenceCount << std::endl;
-
-	std::cout << "Flags: " << std::to_string(segment->Flags);
-	if (segment->Flags & FILE_RECORD_SEGMENT_IN_USE) std::cout << " IN_USE";
-	if (segment->Flags & FILE_FILE_NAME_INDEX_PRESENT) std::cout << " FILE_NAME_INDEX_PRESENT";
-	std::cout << std::endl;
-
-	std::cout << "Update sequence: offset=" << segment->MultiSectorHeader.UpdateSequenceArrayOffset
-		<< ", size=" << segment->MultiSectorHeader.UpdateSequenceArraySize << std::endl;
-	std::cout << "Bytes: available=" << segment->BytesAvailable << ", firstFree=" << segment->FirstFreeByte << std::endl;
-	std::cout << "Attrs: firstOffset=" << segment->FirstAttributeOffset << ", nextInst=" << segment->NextAttributeInstance << std::endl;
-
-	for (ATTRIBUTE_RECORD_HEADER& attr : AttributeIterator(segment))
-		printAttr(attr);
-}
+};
 
 
 class DirIndexPrinter
@@ -210,7 +243,7 @@ protected:
 
 		std::cout << " \"" << dir.name << "\": " << std::endl;
 		for (auto& child : dir.children)
-			std::cout << offset << "  " << "#" << child.segmentNo << ": " << child.name << std::endl;
+			std::cout << offset << "  " << "#" << child.segmentNo << ": " << child.filename << std::endl;
 
 		if (!recursive) return;
 		for (auto& child : dir.children) {
@@ -418,12 +451,15 @@ int main2(int argc, char* argv[]) {
 
 	}
 
+
+	SegmentPrinter segPrinter(src);
+
 	buf.resize(src.mft.BytesPerFileSegment);
 	for (auto& idx : printSegments) {
 		auto segment = (FILE_RECORD_SEGMENT_HEADER*)buf.data();
 		src.mft.readSegmentByIndex(idx, segment);
 		std::cout << std::endl << "Segment #" << std::to_string(idx) << ":" << std::endl;
-		printSegment(segment);
+		segPrinter.printSegment(segment);
 	}
 
 

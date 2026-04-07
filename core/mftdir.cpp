@@ -213,6 +213,8 @@ DirEntryLoader::DirEntryLoader(Mft& mft)
 
 void DirEntryLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 {
+	if (segment->BaseFileRecordSegment.mergedValue == 0)
+		this->isDir = (segment->Flags & FILE_FILE_NAME_INDEX_PRESENT);
 	MultiSegmentFileLoader::loadSegment(segment);
 	this->m_bitmapLoader.advance(); //In case it was non-resident
 	this->advance();
@@ -290,9 +292,9 @@ MftDirEntry DirectoryTreeLoader::load(SegmentNumber segmentNo)
 	loader.load(mft, segmentNo);
 	result.name = std::move(loader.filename.filename);
 	for (auto& childEntry : loader.entries) {
-		MftChildEntry child;
+		DirIndexEntry child;
 		child.segmentNo = childEntry.segmentNo;
-		child.name = std::move(childEntry.filename);
+		child.filename = std::move(childEntry.filename);
 		result.children.push_back(child);
 	}
 	loader.assert_all_processed();
@@ -340,7 +342,7 @@ SegmentNumber DirectoryTreeLoader::traverse(const std::string& path)
 		MftDirEntry& dirEntry = this->get(currentSegment);
 		bool found = false;
 		for (auto& childEntry : dirEntry.children) {
-			if (utf8_iequals(childEntry.name, token)) {
+			if (utf8_iequals(childEntry.filename, token)) {
 				segments.push_back(currentSegment);
 				currentSegment = childEntry.segmentNo;
 				found = true;
@@ -406,8 +408,11 @@ void SegmentInclusionOptions::resolve()
 	//From here on, loadSubtrees ONLY contains the children of exclusions or the roots already added directly.
 	//So don't add anything to direct exclusions now.
 
-	//Move segmentRoots to the queue and them back as they are processed. Prevents duplicate processing and recursion.
+	//Move segmentRoots to the queue and add them back as they are processed.
 	std::unordered_set<SegmentNumber> loadSubtrees = std::move(segmentRoots);
+
+	//Segments we've seen. Prevents duplicate processing and recursion. Can't just check segmentRoots as segments w/out children don't go there.
+	std::unordered_set<SegmentNumber> visited {};
 
 	//Process entries from loadSubtrees, adding new ones as we encounter them
 	while (!loadSubtrees.empty()) {
@@ -415,7 +420,7 @@ void SegmentInclusionOptions::resolve()
 		auto segmentNo = *it;
 		loadSubtrees.erase(it);
 
-		auto pair = segmentRoots.insert(segmentNo);
+		auto pair = visited.insert(segmentNo);
 		if (!pair.second)
 			continue; //Already processed
 
@@ -424,6 +429,10 @@ void SegmentInclusionOptions::resolve()
 			if (segmentRoots.find(childEntry.segmentNo) == segmentRoots.end())
 				loadSubtrees.insert(childEntry.segmentNo);
 		}
+
+		//If the entry has no children it's empty/not a dir. No point in checking against it.
+		if (!entry.children.empty())
+			segmentRoots.insert(segmentNo);
 	}
 
 	this->printDebugInfo();
