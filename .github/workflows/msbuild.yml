@@ -21,6 +21,10 @@ env:
   # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
   BUILD_CONFIGURATION: Release
 
+  # These will get overriden dynamically
+  OUTPUT_DIR: bin
+  RELEASE_NAME:
+
 permissions:
   contents: read
 
@@ -29,6 +33,12 @@ jobs:
     runs-on: windows-latest
 
     steps:
+    - name: Setup vars
+      shell: bash
+      run: |
+        echo "RELEASE_NAME=${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+        echo "OUTPUT_DIR=x64\${{env.BUILD_CONFIGURATION}}" >> $GITHUB_ENV
+
     - uses: actions/checkout@v4
 
     - uses: actions/checkout@v4
@@ -59,3 +69,40 @@ jobs:
       # Add additional options to the MSBuild command line here (like platform or verbosity level).
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
       run: msbuild /m /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=v143 /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}\ntfsdd.sln
+
+
+    # Tests
+    - name: Run Tests
+      shell: powershell
+      run: |
+        $testExe = "${{env.OUTPUT_DIR}}\ntfsdd-tests.exe"
+          
+        if (Test-Path $testExe) {
+            Write-Host "Starting tests: $testExe"
+            & $testExe
+        } else {
+            Write-Error "Test executable not found at $testExe"
+            exit 1
+        }
+
+
+    # Automatic releases
+    - name: Stage Release Files
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Path ./release-dist
+        Copy-Item "${{env.OUTPUT_DIR}}\ntfsdd.exe" -Destination "./release-dist/"
+        Copy-Item "${{env.OUTPUT_DIR}}\ntfs.exe" -Destination "./release-dist/"
+
+    - name: Create ZIP
+      shell: powershell
+      run: Compress-Archive -Path ./release-dist/* -DestinationPath ./ntfsdd-${{ env.RELEASE_NAME }}.zip
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: ntfsdd-${{ env.RELEASE_NAME }}.zip
+        name: ntfsdd ${{ env.RELEASE_NAME }}
+        draft: false
+        prerelease: false
