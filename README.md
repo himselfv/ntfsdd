@@ -21,6 +21,38 @@ Can be used for:
 
 In general you have to run this as Administrator. But start without that and see if your goals are achievable.
 
+This tool is very much in beta. Test it read-only before doing any writes. Stick to its safety measures. Trust it when it says it's confused.
+
+
+
+## Quickstart:
+
+Clone SOURCE (volume, file, vss) to DEST (volume, file):
+```
+ntfsdd copy --select all --source SOURCE --dest DEST --write # All clusters
+ntfsdd copy --select bitmap --source SOURCE --dest DEST --write # Only used
+```
+
+Compare the MFTs and copy potentially changed clusters blindly (useful for HDDs):
+```
+ntfsdd copy --select mft --source SOURCE --dest DEST --write
+```
+
+Compare the MFTs, then compare all the potentially changed clusters and copy the changes (useful for SSDs):
+```
+ntfsdd rvw --select mft --source SOURCE --dest DEST --write
+```
+
+Print the cluster lists matching given selection criteria:
+```
+ntfsdd list --select all/bitmap/mft
+```
+
+Compares the clusters matching the selection criteria and set exit code + print clusters + print affected files.
+```
+ntfsdd compare --select all/bitmap/mft --exit-code --print-clusters --cluster-spans --print-files-to filelist.txt
+```
+
 
 
 ## The basics
@@ -39,11 +71,11 @@ The tool works in two steps:
 **bitmap**
 : Clusters marked as used in $Bitmap on the source volume.
 
-**mft**:
+**mft**
 : Clusters referenced in the MFT segments (~= files/dirs) which are different between the source and the destination. \
   Basically, all clusters referenced by the files that could have changed.
 
-**antimft**:
+**antimft**
 : Clusters marked as used in $Bitmap but NOT belonging to files and dirs which seem to have changed.
 
 MFT is the most narrow mode and it's recommended unless it's not working for you somehow. All/Bitmap are useful for initial cloning/occasional verification.
@@ -55,7 +87,7 @@ MFT is the most narrow mode and it's recommended unless it's not working for you
 : List the selected clusters.
 
 **compare**
-: Compare the selected clusters between the source and the destination. List the clusters with differences.
+: Compare the selected clusters on the source and the destination. List the clusters with differences.
 
 **copy**
 : Copy *all* the selected clusters from the source to the destination. This is typically how clone resync works on HDDs. This is more efficient for the HDDs.
@@ -64,14 +96,22 @@ MFT is the most narrow mode and it's recommended unless it's not working for you
 : Compare the selected clusters between the source and the destination and copy the changed clusters to the destination. This is better for the SSDs because it avoids writes unless neccessary.
 
 
-#### Additional flags to augument the action:
+#### Additional flags:
+
+**--exit-code**
+: Set non-zero exit code on non-empty results (differences, clusters copied).
 
 **--print-clusters**
-: Print relevant clusters (selected/differing/copied ones)
+: Print resulting cluster addresses (selected/differing/copied ones). ``--cluster-spans``, ``--cluster-separator``, ``--print-clusters-to`` control specifics.
 
 **--print-files**
-: Print paths to files containing said clusters.
+: Print paths to files containing said clusters. ``--print-files-to`` to print to a file.
 
+**--quiet --verbose --debug --progress**
+: Verbosity levels + enables progress updates for long operations.
+
+**--human-readable**
+: Sizes in human-readable units instead of bytes.
 
 
 #### Copy or RCW?
@@ -79,39 +119,6 @@ Most existing cloning tools and software/firmware mirror raids do the equivalent
 
 SSDs can only sustain a limited number of writes through their lifetime. That number is not that high. You'll thrash the SSD fast by rewriting it often. Reads on SSDs are more or less free and usually faster than writes, so RCW makes much more sense for SSDs.
 
-
-
-## Examples:
-
-```
-ntfsdd copy --select all --source SOURCE --dest DEST
-```
-Blindly (forensically) clones SOURCE (volume, file, vss) to DEST (volume, file).
-
-```
-ntfsdd copy --select bitmap --source SOURCE --dest DEST
-```
-Same but copies only the clusters used by the filesystem.
-
-```
-ntfsdd copy --select mft --source SOURCE --dest DEST
-```
-Compares the MFTs and copies potentially changed clusters blindly (useful for HDDs).
-
-```
-ntfsdd rvw --select mft --source SOURCE --dest DEST
-```
-Compares the MFTs, then compares all the potentially changed clusters and copies the changes (useful for SSDs).
-
-```
-ntfsdd list --select all/bitmap/mft
-```
-Prints the cluster numbers matching given selection criteria.
-
-```
-ntfsdd compare --select all/bitmap/mft
-```
-Compares the clusters matching the selection criteria and prints the cluster numbers for the changed clusters.
 
 
 
@@ -124,7 +131,11 @@ As a safety measure the tool requires your destination volume to not have any mo
 You're free to do otherwise of course. ``--unsafe-allow-mounted`` disables this check.
 
 
-## Cloning
+## Writing
+As a safety measure, you have to pass ``--write`` to any command where you intend to make changes to the destination volume. Do not pass this on read-only commands.
+
+
+## Raw cloning
 The tool can be used for cloning. "``copy all``" will perform a forensic clone (all clusters) and "``copy bitmap``" will only copy the clusters used (recommended). In both cases, and especially after "``copy all``", ``defrag /Retrim`` is advised on a clone.
 
 When doing a full clone as a safety measure you have to pass ``--overwrite``. No checks against the destination volume layout and MFT will then be made.
@@ -145,7 +156,7 @@ To prevent this, pre-fill the file with zeroes or do one initial ``copy all``.
 * Create NTFS partitions w/different cluster sizes.
 * ```fsutil volume list```
 * ```dd if=\\.\{GUID} of=volumeName.img```
-* Make sure it's \\.\ and not \\?\.
+* Make sure it's ``\\.\`` and not ``\\?\``.
 
 
 ## VSS
