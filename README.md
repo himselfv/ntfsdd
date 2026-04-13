@@ -23,14 +23,15 @@ In general you have to run this as Administrator. But start without that and see
 
 
 
-### The basics
+## The basics
 
 The tool works in two steps:
 
 1. Select the clusters for processing.
 2. Process them.
 
-Selecting the clusters (``--select``):
+
+#### Selecting the clusters (``--select``):
 
 **all**
 : All clusters on the source volume.
@@ -47,7 +48,8 @@ Selecting the clusters (``--select``):
 
 MFT is the most narrow mode and it's recommended unless it's not working for you somehow. All/Bitmap are useful for initial cloning/occasional verification.
 
-The action to perform (``--action``):
+
+#### The action to perform (``--action``):
 
 **list**
 : List the selected clusters.
@@ -61,7 +63,8 @@ The action to perform (``--action``):
 **rcw**
 : Compare the selected clusters between the source and the destination and copy the changed clusters to the destination. This is better for the SSDs because it avoids writes unless neccessary.
 
-Additional flags to augument the action:
+
+#### Additional flags to augument the action:
 
 **--print-clusters**
 : Print relevant clusters (selected/differing/copied ones)
@@ -78,7 +81,7 @@ SSDs can only sustain a limited number of writes through their lifetime. That nu
 
 
 
-### Examples:
+## Examples:
 
 ```
 ntfsdd copy --select all --source SOURCE --dest DEST
@@ -179,7 +182,7 @@ With regular and limited updates I think you can even retrim only occasionally, 
 
 
 ## Ignoring/enforcing files
-There's minimal ability to ignore files. Read carefully what it does! It's not meant as a full filename-based filtering. This is just to skip ```hiberfil.sys``` and ```pagefile.sys``` and so on.
+There's minimal ability to ignore files. Read carefully what it does! It's not meant as a full filename-based filtering. This is just to skip ```hiberfil.sys``` and ```pagefile.sys``` and such.
 
 These options only work with MFT-based selection.
 
@@ -213,7 +216,7 @@ In the same, but safer, way you can force the file clusters to ALWAYS be selecte
 
 
 **Q**: Can I pass file names and paths?\
-**A**: Yeah, with limitations. Symlinks not supported, pass real paths. A file referenced by ANY of its paths (hardlinks) will be skipped/dirtied. Doesn't matter if there are no rules for the other hardlinks.
+**A**: Yeah, with limitations. Symlinks are not supported, pass real paths. A file referenced by ANY of its paths (hardlinks) will be skipped/dirtied. Doesn't matter if there are no rules for the other hardlinks.
 
 **Q**: Why not delete ignored files?\
 **A**: This requires editing the destination MFT, $Bitmap, the transaction log and getting involved in the NTFS internals much deeper than required for our simple cloning. Just delete the file with ```del``` later.
@@ -233,9 +236,18 @@ Honestly, we could skip it. Skip it at your peril. Anyway, I don't think it shou
 
 
 
-
 ## NTFS version support
 I wrote this for my own uses, so I enabled NTFS versions on which I could have checked this. If you need other NTFS versions supported, send me something.
+
+
+
+## NTFScmd
+Companion app to dump and study NTFS internals.
+```
+ntfs --dump-segment --dump-cluster --print-segment --list-dir --help
+```
+Dumps binary (hex) and decoded representation of MFT segments, lists directory contents.
+
 
 
 ## Building
@@ -270,16 +282,18 @@ It reads the volume index (the $MFT) and compares the same file header records (
 
 ### Is the MFT comparison system safe?
 Will it really catch everything? Can't the data change without the MFT entry changing?
-https://www.boku.ru/2026/04/02/ntfs-can-a-file-change-without-its-mft-record-also-changing/
+[See here](https://www.boku.ru/2026/04/02/ntfs-can-a-file-change-without-its-mft-record-also-changing/).
 
-MFT comparison is a bit of a gamble. For normal files and normal cases MFT checks are safe with very solid safety margins. There does not seem to be a mode where you can change anything substantial without the corresponding MFT entries very inevitably changing.
+MFT comparison is a bit of a risk. For normal files and normal cases MFT checks are safe with very solid safety margins. There does not seem to be a mode where you can change anything substantial without the corresponding MFT entries very inevitably changing.
 
-But there are exceptions. Driver magic. System files, cached DUPLICATED_INFORMATION in index entries. And what these exceptions tell us is that there could be *more* exceptions. We handle all the exceptions we know about and it seems to cover everything, but there's no documented promise anywhere that says "No other files will receive driver magic".
+But there are exceptions. Driver magic: system files, cached DUPLICATED_INFORMATION in index entries. What these exceptions tell us is that there could be *more* exceptions. We handle all the exceptions we know about and it seems to cover everything, but there's no documented promise anywhere that says "No other files will receive driver magic".
 
 Our hope is instead that:
+
 1. We cover most of the major exceptions.
 2. We leave the target volume in a consistent state.
 3. Any files or clusters that slip through the cracks are mishandled predictably. Their contents will be garbage/old versions, but the volume will work.
+4. Once the exceptions are noticed, they can also be handled. If they aren't noticed in time, the damage is limited.
 
 To protect against this long term, do a ```compare --select antimft --exit-code``` scan from time to time to detect any slippages. Hopefully there should be none.
 
@@ -287,26 +301,27 @@ Another way to look at this system is: When you're running rclone, it compares e
 
 
 ### Eventual consistency
-NTFS delays writing out some changes to the volume, from milliseconds for normal data to hours for LastAccessTime/LastModificationTime according to some reports. Is this not a problem for our algorithms? How consistent will be a clone made from a live system?
+NTFS delays writing out some changes to the volume, from milliseconds for normal data to hours for LastAccessTime/LastModificationTime according to some reports. Is this not a problem? How consistent will be a clone made from a live system?
 
-The clone made from a *raw live* disk will not be consistent at all! As you're copying the sectors, other sectors change and so your copy will be self-contradictory. Thankfully, the OS will usually not let you do that. It will require locking the volume first.
+The clone made from a *raw live* disk will not be consistent at all! As you're copying the sectors, other sectors change and so your copy will be self-contradictory. Thankfully, the OS will usually not let you do that without locking.
 
-The clone made from a locked disk has *crash consistency* (see below). VSS snapshots without writers also have crash consistency (safer and more explicitly guaranteed), as do snapshots with writers + maybe a little bit more. VSS has an added benefit that you CAN make a snapshot of an OS volume, while you cannot usually just lock it.
+The clone made from a locked disk, or any VSS snapshot, has *crash consistency*. It's what you get when you yank out the power cord from your PC:
 
-Crash consistency is what you get when you yank out the power cord from your PC at an arbitrary moment:
 * Anything not yet written to the disk will be lost.
 * The OS will usually boot and function fine.
 * Apps which were weren't designed with this in mind may sometimes have their data corrupted.
 
-NTFS volume will be low-level consistent. $Bitmap will correctly identify used clusters, MFT segments will correctly account for all of them. However it only means that the volume itself remains healthy. VSS with writers tries to ensure that some critical services save their data properly before cloning. This is useful but covers only a handful, which are pretty resilient anyway. Your average userspace app is still on its own.
+For VSS snapshots crash consistency is explicitly guaranteed. VSS has an added benefit that you CAN make a snapshot of an OS volume, while you cannot usually just lock it.
 
-**Q**: How do I get something better than a crash consistency?
+With crash consistency, $Bitmap will correctly identify used clusters, MFT segments will correctly account for all of them. However it only means that the volume itself remains healthy. VSS with writers tries to ensure that some critical services save their data properly before cloning. This is useful but covers only a handful cases, which are pretty resilient anyway.
+
+**Q**: How do I get something better than a crash consistency? \
 **A**: Unmount the source, remove it's drive letter and mount points. This ensures that very little to no apps use it. For the OS volume, if you want true consistency, shut the PC down and clone the volume from another OS.
 
-**Q**: How bad is crash consistency?
-**A**: It's pretty much normal for live backups. Power outages happen, apps usually try to be at least somewhat resilient. Try to run updates at a time when there's minimal system activity to minimize the number of apps that can be affected.
+**Q**: How bad is crash consistency? \
+**A**: It's pretty normal for live backups. Power outages happen, apps usually try to be at least somewhat resilient. Try to run updates at a time when there's minimal system activity to minimize the number of apps that can be affected.
 
-VSS might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to do "prepare for backup" but there are no literal lists of guarantees about particulars of caching.
+VSS might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to do "prepare for backup" but there are no detailed guarantees about particulars of caching.
 
 However, you're also not actually crashing. Those changes will get written out, just too late to be included into the backup this time. So what this tool cares about is *eventual consistency*. We will miss the changes in data these reflect, but we will catch them next time!
 
