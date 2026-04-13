@@ -220,10 +220,16 @@ WARNING: Security risk. Data from other files will leak into these. Might not ma
 * Manually ```del``` the file on the destination after cloning if you care.
 
 
-WARNING: Havoc risk. When you skip a dir alone, its index is skipped. The files are still copied (unless you skip them too). The files contain backreferences to dirs including them. So you now have incorrect backreferences. PLUS incorrect obsolete forward-references. Or maybe even garbage. Perhaps you shouldn't skip dirs!
+WARNING: Havoc risk. When you skip a dir alone, its index is skipped. The files are still copied. Even if you skip the files, their MFT entries ARE still copied. These contain backreferences to the dirs including them. So now you have incorrect backreferences. PLUS incorrect obsolete forward-references. Or maybe even garbage. Perhaps you shouldn't skip dirs!
+
+But if you mark all index allocations as dirty (``--all-index-dirty``) which is a useful thing to do sometimes, then dir indexes are effectively never skipped. Non-resident allocations because of this flag, and resident ones since they're in the MFT which is never skipped. So I think you can skip dirs in this case.
 
 
 In the same, but safer, way you can force the file clusters to ALWAYS be selected with ``--include-``. Internally this is used to handle driver magic folders such as System Volume Information. This has absolutely NO side effects except for more data to rcw/copy each time.
+
+* ``--standard-includes``: Assume ``$Extend``, ``System Volume Information`` and some other subtrees always dirty, as these sometimes can change without this being properly reflected in the MFT. On by default.
+
+* ``--all-index-dirty``: Assume all non-resident $INDEX_ALLOCATIONs to be dirty. More clusters to check, but you will catch background updates to DUPLICATE_INFORMATION in directory indexes (which otherwise do not affect the dir's MFT). These are details cached for speed so *I think* you might be fine without that. Enable if you want to be safe.
 
 
 **Q**: Can I pass file names and paths?\
@@ -263,9 +269,12 @@ Dumps binary (hex) and decoded representation of MFT segments, lists directory c
 
 ## Building
 Compiles with MSVC2015/C++14.
+
 All requirements are in Requirements.example.props, rename and provide local paths.
 
-There are some tests, write more. If you have ideas on how to setup testing on a large number of isolated real-life NTFS edge cases without keeping large volume images in the repo, suggest them.
+There are some tests, write more.
+
+If you have ideas on how to setup testing on a large number of isolated real-life NTFS edge cases without keeping large volume images in the repo, suggest them.
 
 
 
