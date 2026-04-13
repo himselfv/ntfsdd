@@ -27,7 +27,7 @@ env:
   RELEASE_NAME:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
