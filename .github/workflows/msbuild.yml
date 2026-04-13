@@ -34,6 +34,7 @@ jobs:
 
     steps:
     - name: Setup vars
+      shell: bash
       run: |
         echo "RELEASE_NAME=${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
         echo "OUTPUT_DIR=x64\${{env.BUILD_CONFIGURATION}}" >> $GITHUB_ENV
