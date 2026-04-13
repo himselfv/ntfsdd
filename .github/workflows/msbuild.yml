@@ -46,8 +46,10 @@ jobs:
     - name: Configure Requirements.props
       run: |
         Copy-Item Requirements.example.props Requirements.props
-        (Get-Content Requirements.props) -replace '<CLI11></CLI11>', '<CLI11>deps/CLI11</CLI11>' | Set-Content Requirements.props
-        (Get-Content Requirements.props) -replace '<Catch2></Catch2>', '<Catch2>deps/Catch2</Catch2>' | Set-Content Requirements.props
+        (Get-Content Requirements.props) -replace '<CLI11></CLI11>', '<CLI11>$(MSBuildThisFileDirectory)deps\CLI11</CLI11>' | Set-Content Requirements.props
+        (Get-Content Requirements.props) -replace '<Catch2></Catch2>', '<Catch2>$(MSBuildThisFileDirectory)deps\Catch2</Catch2>' | Set-Content Requirements.props
+        Write-Host "--- Updated Requirements.props Content ---"
+        Get-Content Requirements.props
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
