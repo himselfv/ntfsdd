@@ -5,7 +5,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.
 Given a source NTFS volume and a target clone of it, uses NTFS $Bitmap or compares the MFTs to generate a list of potentially changed clusters.
 Compares these clusters on the source and the destination and copies the changes to the destination.
 
-AKA in some apps: Rapid Delta Clone. (But this one is with read-compare-write!)
+AKA in some apps: Rapid Delta Clone. (But this one has read-compare-write!)
 
 The goals:
 
@@ -39,8 +39,11 @@ Selecting the clusters (``--select``):
 : Clusters marked as used in $Bitmap on the source volume.
 
 **mft**:
-: Clusters referenced in any of the MFT segments (~= files/dirs) which are different between the source and the destination. \
+: Clusters referenced in the MFT segments (~= files/dirs) which are different between the source and the destination. \
   Basically, all clusters referenced by the files that could have changed.
+
+**antimft**:
+: Clusters marked as used in $Bitmap but NOT belonging to files and dirs which seem to have changed.
 
 MFT is the most narrow mode and it's recommended unless it's not working for you somehow. All/Bitmap are useful for initial cloning/occasional verification.
 
@@ -58,6 +61,15 @@ The action to perform (``--action``):
 **rcw**
 : Compare the selected clusters between the source and the destination and copy the changed clusters to the destination. This is better for the SSDs because it avoids writes unless neccessary.
 
+Additional flags to augument the action:
+
+**--print-clusters**
+: Print relevant clusters (selected/differing/copied ones)
+
+**--print-files**
+: Print paths to files containing said clusters.
+
+
 
 #### Copy or RCW?
 Most existing cloning tools and software/firmware mirror raids do the equivalent of **copy** (I checked), either for the whole drive (raids) or for the partition being cloned. This is more efficient for HDDs. On HDDs reads and writes have similar time costs so it's faster to read+write instead of read+read+compare+write. Writes on HDDs are more or less free and may even help by reinforcing the stored data.
@@ -71,7 +83,7 @@ SSDs can only sustain a limited number of writes through their lifetime. That nu
 ```
 ntfsdd copy --select all --source SOURCE --dest DEST
 ```
-Blindly clones SOURCE (volume, file, vss) to DEST (volume, file).
+Blindly (forensically) clones SOURCE (volume, file, vss) to DEST (volume, file).
 
 ```
 ntfsdd copy --select bitmap --source SOURCE --dest DEST
@@ -103,14 +115,14 @@ Compares the clusters matching the selection criteria and prints the cluster num
 ## Unmounting
 As a safety measure the tool requires your destination volume to not have any mount points. This is to prevent accidental wiping of unintended volumes. It is advised to NOT dismount your destination automatically via script, as that negates the safety. Instead,
 
-1. For a one-shot copy, dismount the volume manually. Make sure you have dismounted the correct DriveLetter.
+1. For a one-shot copy, dismount the volume manually. Make sure you have dismounted the correct drive letter.
 2. If you're doing regular scripted updates, keep the target free of mount points permanently.
 
 You're free to do otherwise of course. ``--unsafe-allow-mounted`` disables this check.
 
 
 ## Cloning
-The tool can be used for cloning. "``copy all``" will perform a forensic clone (all clusters) and "``copy bitmap``" will only copy the clusters used (recommended). In both cases, and especially after "``copy all``", ``defrag /Retrim`` is advised after clone.
+The tool can be used for cloning. "``copy all``" will perform a forensic clone (all clusters) and "``copy bitmap``" will only copy the clusters used (recommended). In both cases, and especially after "``copy all``", ``defrag /Retrim`` is advised on a clone.
 
 When doing a full clone as a safety measure you have to pass ``--overwrite``. No checks against the destination volume layout and MFT will then be made.
 
@@ -122,7 +134,7 @@ type nul >filename.img
 ```
 
 Note that "```copy all```" will produce a file equivalent to the source in size. "```copy bitmap```" might produce a smaller file as final empty unused sectors will not be copied. This may confuse some tools, idk. You'll also likely not be able to "```copy all```" from that file and will have to restore it with "```copy bitmap```". \
-To prevent this, pre-fill the file with zeroes or do one ``copy all``.
+To prevent this, pre-fill the file with zeroes or do one initial ``copy all``.
 
 #### HOW TO CREATE SMALL NTFS VOLUMES IN FILES W/VARIOUS PARAMS:
 * Disk management MMC.
@@ -201,7 +213,7 @@ In the same, but safer, way you can force the file clusters to ALWAYS be selecte
 
 
 **Q**: Can I pass file names and paths?\
-**A**: Yeah, with limitations. Symlinks not suppored, pass real paths. A file referenced by ANY of its paths (hardlinks) will be skipped/dirtied. Doesn't matter if there are no rules for the other hardlinks.
+**A**: Yeah, with limitations. Symlinks not supported, pass real paths. A file referenced by ANY of its paths (hardlinks) will be skipped/dirtied. Doesn't matter if there are no rules for the other hardlinks.
 
 **Q**: Why not delete ignored files?\
 **A**: This requires editing the destination MFT, $Bitmap, the transaction log and getting involved in the NTFS internals much deeper than required for our simple cloning. Just delete the file with ```del``` later.
@@ -230,14 +242,14 @@ I wrote this for my own uses, so I enabled NTFS versions on which I could have c
 Compiles with MSVC2015/C++14.
 All requirements are in Requirements.example.props, rename and provide local paths.
 
-There are some tests, write more.
+There are some tests, write more. If you have ideas on how to setup testing on a large number of isolated real-life NTFS edge cases without keeping large volume images in the repo, suggest them.
 
 
 
 ## In-depth discussion
 
 ### Is the Bitmap selection system safe?
-Bitmap selection is slow but should be 100% safe. We're comparing ALL clusters that the source file system says are in use. You really have to break NTFS fundamentally for this to be less than a full clone.
+Bitmap selection is slow but should be 100% safe. We're comparing ALL clusters that the source file system says are in use. You really have to break NTFS fundamentally for this to be an incomplete clone.
 
 
 
@@ -260,11 +272,11 @@ It reads the volume index (the $MFT) and compares the same file header records (
 Will it really catch everything? Can't the data change without the MFT entry changing?
 https://www.boku.ru/2026/04/02/ntfs-can-a-file-change-without-its-mft-record-also-changing/
 
-MFT comparison is a bit of a gamble. For normal files and normal cases MFT checks are safe with very solid safety margins. There does not seem to be a mode where you can change anything substantial without the corresponding MFT entries changing with a guarantee.
+MFT comparison is a bit of a gamble. For normal files and normal cases MFT checks are safe with very solid safety margins. There does not seem to be a mode where you can change anything substantial without the corresponding MFT entries very inevitably changing.
 
 But there are exceptions. Driver magic. System files, cached DUPLICATED_INFORMATION in index entries. And what these exceptions tell us is that there could be *more* exceptions. We handle all the exceptions we know about and it seems to cover everything, but there's no documented promise anywhere that says "No other files will receive driver magic".
 
-What we rely on instead is:
+Our hope is instead that:
 1. We cover most of the major exceptions.
 2. We leave the target volume in a consistent state.
 3. Any files or clusters that slip through the cracks are mishandled predictably. Their contents will be garbage/old versions, but the volume will work.
@@ -277,31 +289,40 @@ Another way to look at this system is: When you're running rclone, it compares e
 ### Eventual consistency
 NTFS delays writing out some changes to the volume, from milliseconds for normal data to hours for LastAccessTime/LastModificationTime according to some reports. Is this not a problem for our algorithms? How consistent will be a clone made from a live system?
 
-Here's what you should understand:
-1. You can pull the power plug at any moment. Anything not yet written to the disk will be lost. What you get is called *crash consistency*. NTFS is designed to be crash consistent. On the next boot it will perform some automatic transparent recovery actions and the volume will continue working.
-2. Crash consistency only means that the volume itself remains healthy. The data that has not yet been written to disk at the moment of the crash will be lost. Some apps, like NTFS, are prepared for this and will continue working. Others may be so unprepared that their data becomes broken.
-3. If you copy a raw LIVE volume WITHOUT VSS, you get INCONSISTENCY. As you're copying the sectors, other sectors change and so your copy will be self-contradictory. Thankfully, the OS will usually not let you do that.
-4. LOCKED volume should be NTFS-crash-consistent. If you managed to lock the volume, NTFS will not touch it until you release it. You get the same guarantees as with pulling the power plug (maybe even a bit better). The running apps may still be in the process of updating their files, and the copy you make will be inconsistent from their point of view. But it will work.
-5. VSS snapshot (--shadow) instantly creates a "copy" of the volume which is crash consistent. It's the same as locking, only you can use the snapshot long-term. It's your individual plaything, while the world goes on, modifying the real volume. You won't see those modifications. Still, it's only crash consistent.
-6. VSS with writers (--shadow --writers) additionally coordinates many system services by asking them to prepare for backup: finish any operations and write any cached data. This lowers the chance that the snapshot will have broken data for those services. This does not cover all the apps in the system, and the ones it covers are normally pretty resilient anyway.
+The clone made from a *raw live* disk will not be consistent at all! As you're copying the sectors, other sectors change and so your copy will be self-contradictory. Thankfully, the OS will usually not let you do that. It will require locking the volume first.
 
-The recommended way of running this on live systems is ``--shadow`` or ``--shadow --writers``. Therefore any time you're updating the clone you get crash consistency: more or less no worse than what you'd get if you pulled the plug at that moment. This is pretty much normal for live backups. Try to run updates at a time when there's minimal system activity to minimize the number of apps that can be affected.
+The clone made from a locked disk has *crash consistency* (see below). VSS snapshots without writers also have crash consistency (safer and more explicitly guaranteed), as do snapshots with writers + maybe a little bit more. VSS has an added benefit that you CAN make a snapshot of an OS volume, while you cannot usually just lock it.
 
-Crash consistency + VSS snapshot guarantee that the NTFS volume state will be low-level consistent. $Bitmap will correctly identify clusters used, MFT segments will correctly account for all of them. We're verifying that when we're doing the clone.
+Crash consistency is what you get when you yank out the power cord from your PC at an arbitrary moment:
+* Anything not yet written to the disk will be lost.
+* The OS will usually boot and function fine.
+* Apps which were weren't designed with this in mind may sometimes have their data corrupted.
 
-VSS crash consistency might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to do *something like that* (prepare for backup), but there are no literal lists of high-level guarantees about particulars of caching. So what this tool cares about is *eventual consistency*. If for some reason some less consequential changes to the MFT are not yet written out at the time of taking the snapshot, yes, with ``--select mft`` we will miss the changes in data those reflect. But we will catch them next time!
+NTFS volume will be low-level consistent. $Bitmap will correctly identify used clusters, MFT segments will correctly account for all of them. However it only means that the volume itself remains healthy. VSS with writers tries to ensure that some critical services save their data properly before cloning. This is useful but covers only a handful, which are pretty resilient anyway. Your average userspace app is still on its own.
 
-This is not a problem because the precise moment when the clone runs is arbitrary anyway: it could have happened a moment earlier when those changes to the data had not yet been made, and we would have missed them too until next time. So even though the changes *had* been made and we have not seen them *yet*, what matters is every change gets caught *eventually*.
+**Q**: How do I get something better than a crash consistency?
+**A**: Unmount the source, remove it's drive letter and mount points. This ensures that very little to no apps use it. For the OS volume, if you want true consistency, shut the PC down and clone the volume from another OS.
 
-Creating a shadow is supposed to trigger flushing all possible caches, including writing out any cached modtimes and segments (which can otherwise be cached in some cases for up to, sources tell, hours). There's no real guarantee this will happen.
-HOWEVER. What we care about is *eventual* consistency. Even if you miss some changes today, if you do the sync again you'll catch it later. The goal is to have no *permanently undetectable* changes. And to have no *inconsistent FS*. We guarantee FS consistency by force-comparing the MFT (which gives us power-down crash consistency, and maybe more, if VSS+writers work as intended).
-With FS-consistency, file-inconsistency, if any, will look like recently changed files having 1. Their old content (if their cached segment changes have not been written out) - their state should be consistent with the state of the rest of the volume. If any inconsistencies are present, those will get resolved in the same way as when you reboot after a sudden power-down, by using the NTFS log journal. 2. Their old content (if the content had changed, no segment changes had been needed, no size change had happened, and the lastmodtime and LSN/USN/stuff had not yet been written down to disk). 3. Purely theoretically, maybe in some cases, garbage (can't invent examples right now, but it's one of the theoretically stable states of the volume where some updates had been skipped).
+**Q**: How bad is crash consistency?
+**A**: It's pretty much normal for live backups. Power outages happen, apps usually try to be at least somewhat resilient. Try to run updates at a time when there's minimal system activity to minimize the number of apps that can be affected.
+
+VSS might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to do "prepare for backup" but there are no literal lists of guarantees about particulars of caching.
+
+However, you're also not actually crashing. Those changes will get written out, just too late to be included into the backup this time. So what this tool cares about is *eventual consistency*. We will miss the changes in data these reflect, but we will catch them next time!
+
+This is not a problem because the precise moment when the clone runs is arbitrary anyway: it could have happened a moment earlier when those changes had not yet been made, and we would have missed them anyway. So even though the changes *had* been made and we have not seen them *yet*, what matters is every change gets caught *eventually*.
+
+The goal is to have no *permanently undetectable* changes.
 
 
-### What about deletions?
+### MFT comparison and deletions
 The algorithm only compares segments which are IN_USE on the source. What about the segments that were IN_USE but are now not? Do we not need to free their segments?
 
 No! We're selecting clusters to verify/copy. *Which* clusters are in use depends only on the $MFT itself and on $Bitmap, not the content of those clusters. We *always* sync the entire $MFT and $Bitmap, and so we always copy the entire actual picture of what clusters are now not in use. We do not need to copy those clusters.
 
 Do we not need to update the segment on the destination? Yes we do, and we will, even without selecting its clusters: Again: We *always* sync the entire $MFT and $Bitmap.
 
+
+### The destination immediately changing
+If you do a ``compare`` immediately after ``rcw``/``clone``, you may notice there are changes - even if your source is the same VSS shadow which stayed constant. The OS does some minor bookkeeping once you unlock the destination volume. Normally it should be just a few $System files.
+Filter drivers may do their own thing too, so if you're solving some weirdness, check out which filter drivers you do have installed.
