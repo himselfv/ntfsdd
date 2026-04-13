@@ -22,8 +22,8 @@ env:
   BUILD_CONFIGURATION: Release
 
   # These will get overriden dynamically
-  #OUTPUT_DIR: bin
-  #RELEASE_NAME:
+  OUTPUT_DIR: bin
+  RELEASE_NAME:
 
 permissions:
   contents: read
