@@ -59,3 +59,42 @@ jobs:
       # Add additional options to the MSBuild command line here (like platform or verbosity level).
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
       run: msbuild /m /p:WindowsTargetPlatformVersion=10.0 /p:PlatformToolset=v143 /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}\ntfsdd.sln
+
+
+    # Tests
+    - name: Run Tests
+      shell: powershell
+      run: |
+        # Point this to where your test project outputs its .exe
+        $testExe = "x64\${{env.BUILD_CONFIGURATION}}\ntfsdd-tests.exe"
+          
+        if (Test-Path $testExe) {
+            Write-Host "Starting tests: $testExe"
+            # Run the exe. PowerShell will capture the exit code automatically.
+            & $testExe
+        } else {
+            Write-Error "Test executable not found at $testExe"
+            exit 1
+        }
+
+
+    # Automatic releases
+    - name: Stage Release Files
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Path ./release-dist
+        Copy-Item "x64\${{env.BUILD_CONFIGURATION}}\ntfsdd.exe" -Destination "./release-dist/"
+        Copy-Item "x64\${{env.BUILD_CONFIGURATION}}\ntfs.exe" -Destination "./release-dist/"
+
+    - name: Create ZIP
+      shell: powershell
+      run: Compress-Archive -Path ./release-dist/* -DestinationPath ./ntfsdd-${{ github.ref_name }}.zip
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: ntfsdd-${{ github.ref_name }}.zip
+        name: ntfsdd ${{ github.ref_name }}
+        draft: false
+        prerelease: false
