@@ -254,7 +254,7 @@ Honestly, we could skip it. Skip it at your peril. Anyway, I don't think it shou
 
 
 ## NTFS version support
-I wrote this for my own uses, so I enabled NTFS versions on which I could have checked this. If you need other NTFS versions supported, send me something.
+I wrote this for my own uses, so I enabled NTFS versions on which I could check this. If you need other NTFS versions supported, send me something.
 
 
 
@@ -338,10 +338,13 @@ With crash consistency, $Bitmap will correctly identify used clusters, MFT segme
 **Q**: How do I get something better than a crash consistency? \
 **A**: Unmount the source, remove it's drive letter and mount points. This ensures that very little to no apps use it. For the OS volume, if you want true consistency, shut the PC down and clone the volume from another OS.
 
+**Q**: Little to no? Not "none"?
+**A**: You can still access the volume by its ``\\?\`` name, and apps can still hold open handles from before. Dismounting is supposed to do something about that, but I bet there's an exception or two.
+
 **Q**: How bad is crash consistency? \
 **A**: It's pretty normal for live backups. Power outages happen, apps usually try to be at least somewhat resilient. Try to run updates at a time when there's minimal system activity to minimize the number of apps that can be affected.
 
-VSS might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to do "prepare for backup" but there are no detailed guarantees about particulars of caching.
+VSS might not guarantee that some cached data, such as LastModificationTime, is written out. It's supposed to "prepare for backup" but there are no detailed guarantees about particulars of caching.
 
 However, you're also not actually crashing. Those changes will get written out, just too late to be included into the backup this time. So what this tool cares about is *eventual consistency*. We will miss the changes in data these reflect, but we will catch them next time!
 
@@ -361,3 +364,11 @@ Do we not need to update the segment on the destination? Yes we do, and we will,
 ### The destination immediately changing
 If you do a ``compare`` immediately after ``rcw``/``clone``, you may notice there are changes - even if your source is the same VSS shadow which stayed constant. The OS does some minor bookkeeping once you unlock the destination volume. Normally it should be just a few $System files.
 Filter drivers may do their own thing too, so if you're solving some weirdness, check out which filter drivers you do have installed.
+
+
+### DUPLICATE_INFORMATION
+Directories cache some information about the files they host, such as their sizes and last modification times. This does not always get updated in time. This is especially true because the file could be referenced from multiple dirs via hardlinks. This is fine because the source of the truth is the file entry itself. DUPLICATE_INFORMATION is used for directory size estimations and such things.
+
+When the driver gets around to updating these fields, it can happen at any time, without any reasonable trigger, and the driver often does not change the directory's MFT. This is reasonable, as this update of the file's properties is not an update of the directory itself. Yet this change will be missed.
+
+You can accept that (it's just cached info anyway, or at least we hope it's *just* cached info), or enable ``--all-index-dirty``. This will force all non-resident index allocations to be treated as dirty, catching these cases.
