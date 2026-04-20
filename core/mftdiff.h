@@ -130,8 +130,8 @@ public:
 	//Populated during the scan
 	CandidateClusterMap srcDiff;
 
-	//If set, do not consider segments where ONLY the USN has changed as dirty. Double-edged sword.
-	bool ignoreUsnChanges = true;
+	//If set, do not consider segments where ONLY the fixup has changed as dirty. Double-edged sword.
+	bool ignoreFixupChanges = true;
 
 	//If set, on exit filemap will include all files with dirty segments.
 	bool filemapListDirty = false;

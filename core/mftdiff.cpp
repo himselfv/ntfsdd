@@ -365,7 +365,7 @@ void MftDiff::processValidSegment()
 			diffStats.dirtyBecauseOfCmp++;
 		
 		if (*srcUsnAddr != destUsnOrig && !dirty) {
-			if (!this->ignoreUsnChanges) {
+			if (!this->ignoreFixupChanges) {
 				dirty = true;
 				diffStats.dirtyBecauseOfUsnOnly++;
 			}

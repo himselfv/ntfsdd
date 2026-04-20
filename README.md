@@ -231,6 +231,8 @@ In the same, but safer, way you can force the file clusters to ALWAYS be selecte
 
 * ``--all-index-dirty``: Assume all non-resident $INDEX_ALLOCATIONs to be dirty. More clusters to check, but you will catch background updates to DUPLICATE_INFORMATION in directory indexes (which otherwise do not affect the dir's MFT). These are details cached for speed so *I think* you might be fine without that. Enable if you want to be safe.
 
+* ``--ignore-fixups``: NTFS has a non-specific "fixup" counter to synchronize multi-sector writes. Every time a segment is written, the counter is incremented for all segments in this cluster. Reacting to it thus inflates the number of selected segments many-fold. This option enables ignoring fixup changes in a segment if nothing else had changed. This is likely fine, as substantial changes to segments trigger much more than just a "cluster write counter". On by default.
+
 
 **Q**: Can I pass file names and paths?\
 **A**: Yeah, with limitations. Symlinks are not supported, pass real paths. A file referenced by ANY of its paths (hardlinks) will be skipped/dirtied. Doesn't matter if there are no rules for the other hardlinks.

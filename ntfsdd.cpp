@@ -491,11 +491,16 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	skipOptions.add_option("--standard-includes", bAddStandardIncludes, "Mark $Extend, System Volume Information and Boot dirs dirty wil all the content. Recommended.")
 		->delimiter(',');
 
+	bool bIgnoreFixupChanges = false;
+	skipOptions.add_option("--ignore-fixups", bIgnoreFixupChanges, "Consider segments unchanged if ONLY the fixup has changed.")
+		->delimiter(',');
+
 	bool bMarkAllIndexClustersDirty = false;
 	skipOptions.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. "
 		"Indexes may change subtly without this being reflected in the MFT entries. May or may not be neccessary.")
 		->capture_default_str()
 		;
+
 
 
 
@@ -762,6 +767,7 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			mftScanner.reset(new MftDiff(*src.mft, *dest.mft));
 			auto& diff = *static_cast<MftDiff*>(mftScanner.get());
 			diff.markAllIndexClustersDirty = bMarkAllIndexClustersDirty;
+			diff.ignoreFixupChanges = bIgnoreFixupChanges;
 			diff.addSkipSegments(excludes.segments);
 			diff.addSkipRoots(excludes.segmentRoots);
 			diff.addDirtySegments(includes.segments);
