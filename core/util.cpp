@@ -19,16 +19,24 @@ std::string dataSizeToStr(size_t sizeInBytes)
 	if (!LogPrinter::humanReadableSizes)
 		return std::to_string(sizeInBytes);
 
-	static std::string SizeDegrees[7] { "b", "Kb", "Mb", "Gb", "Tb", "Pb" };
+	if (sizeInBytes < 1024)
+		return std::to_string(sizeInBytes) + 'b';
+
+	static std::string SizeDegrees[5] { "Kb", "Mb", "Gb", "Tb", "Pb" };
 
 	int idx = 0;
-	while (sizeInBytes > 0 && idx < 7) {
-		if (sizeInBytes < 1024)
-			return std::to_string(sizeInBytes) + SizeDegrees[idx];
-		sizeInBytes /= 1024;
+	double sizeInUnits = sizeInBytes / 1024.0;
+	while (idx < 4) {
+		if (sizeInUnits < 1024.0)
+			break;
+		sizeInUnits /= 1024.0;
 		idx++;
 	}
-	return std::to_string(sizeInBytes) + SizeDegrees[idx];
+
+
+	std::string val = std::to_string(sizeInUnits);
+	if (val.size() > 3) val.resize(val.size() - 3); //Cut last 3 precision digits out of 6
+	return val + SizeDegrees[idx];
 }
 
 
