@@ -44,7 +44,7 @@ template<> struct EnumNames<DdMode> {
 	{ DdMode::Bitmap, "bitmap",		"All clusters in use at source according to $Bitmap"  },
 	{ DdMode::MFT,	  "mft",		"All sectors in use at source according to MFT segments that differ from destination"  },
 
-	{ DdMode::AntiMFT, "antimft",	"All clusters in use accoding to $Bitmapm, which have NOT changed according to our MFT scan." },
+	{ DdMode::AntiMFT, "antimft",	"All clusters in use accoding to $Bitmap, which have NOT changed according to our MFT scan." },
 	/*
 	AntiMFT selects $Bitmap *minus* MFT.
 	== All the clusters that are in use and should not have changed according to the MFT comparison.
