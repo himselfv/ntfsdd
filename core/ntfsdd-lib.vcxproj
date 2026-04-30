@@ -76,16 +76,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <IntDir>$(Platform)\ntfsdd-lib-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <IntDir>$(Platform)\ntfsdd-lib-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IntDir>$(Platform)\ntfsdd-lib-$(Configuration)\</IntDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <IntDir>$(Platform)\ntfsdd-lib-$(Configuration)\</IntDir>
+    <IncludePath>$(SolutionDir)core;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -160,6 +164,7 @@
     </Lib>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\printers\segmentprint.cpp" />
     <ClCompile Include="bitmap.cpp" />
     <ClCompile Include="clusterdiff.cpp" />
     <ClCompile Include="mftdiff.cpp" />
@@ -172,6 +177,7 @@
     <ClCompile Include="vssutil.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\printers\segmentprint.h" />
     <ClInclude Include="bitmap.h" />
     <ClInclude Include="clusterdiff.h" />
     <ClInclude Include="mftdiff.h" />
