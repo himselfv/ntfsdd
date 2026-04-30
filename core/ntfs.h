@@ -632,10 +632,13 @@ typedef struct _INDEX_ENTRY {
     //  Reserved to round to quad-word boundary.
     USHORT Reserved;                                                //  offset = 0x00E
 
-    //  If this Index Entry is an intermediate node in the tree, as
+	// Attribute data for this entry. INDEX_ENTRY_END entries will lack this.
+	inline byte* attributeData() { return (byte*)this + sizeof(INDEX_ENTRY); }
+	inline FILE_NAME& fileName() { return *(FILE_NAME*)(this->attributeData()); }
+
+	//  If this Index Entry is an intermediate node in the tree, as
     //  determined by the INDEX_xxx flags, then a VCN  is stored at
     //  the end of this entry at Length - sizeof(VCN).
-	FILE_NAME FileName;
 
 } INDEX_ENTRY;                                                      //  sizeof = 0x010
 typedef INDEX_ENTRY *PINDEX_ENTRY;
