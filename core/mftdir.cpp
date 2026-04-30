@@ -65,14 +65,14 @@ size_t BitmapProcessor::tryReadEntry(byte* buf, size_t len)
 
 
 
-DirIndexProcessor::DirIndexProcessor(Volume* vol)
+IndexProcessor::IndexProcessor(Volume* vol)
 	: AttributeCollectorProcessor(vol), m_bitmapLoader(vol, m_bitmap)
 {
 	this->m_root.BytesPerIndexBuffer = 0; //Not initialized flag
 }
 
 //Pass index root here. It's always resident, only one instance of it in the multi-segment file.
-void DirIndexProcessor::processIndexRoot(void* data, size_t len)
+void IndexProcessor::processIndexRoot(void* data, size_t len)
 {
 	assert(!this->haveIndexRoot(), "Second $INDEX_ROOT encountered in DirIndexProcessor!");
 	assert(len >= sizeof(INDEX_ROOT));
@@ -85,7 +85,12 @@ void DirIndexProcessor::processIndexRoot(void* data, size_t len)
 	this->readIndexEntries(&header->IndexHeader);
 }
 
-void DirIndexProcessor::processBitmapAttr(ATTRIBUTE_RECORD_HEADER& attr)
+void IndexProcessor::processIndexAllocationBuffer(INDEX_ALLOCATION_BUFFER* buffer)
+{
+	this->readIndexEntries(&buffer->IndexHeader);
+}
+
+void IndexProcessor::processBitmapAttr(ATTRIBUTE_RECORD_HEADER& attr)
 {
 	if (attr.FormCode == RESIDENT_FORM)
 		this->m_bitmapLoader.processResidentAttr(attr);
@@ -94,7 +99,13 @@ void DirIndexProcessor::processBitmapAttr(ATTRIBUTE_RECORD_HEADER& attr)
 }
 
 
-size_t DirIndexProcessor::tryReadEntry(byte* buf, size_t len)
+int IndexProcessor::advance()
+{
+	auto bitmapAdvanceSteps = this->m_bitmapLoader.advance(); //In case it was non-resident
+	return bitmapAdvanceSteps + AttributeCollectorProcessor::advance();
+}
+
+size_t IndexProcessor::tryReadEntry(byte* buf, size_t len)
 {
 	//We need $INDEX_ROOT to know the sizes and $BITMAP to know which Index Allocation Buffers are in use.
 	if (!this->haveIndexRoot()) return 0;
@@ -112,12 +123,6 @@ size_t DirIndexProcessor::tryReadEntry(byte* buf, size_t len)
 	assert(this->sizeInBytes() % this->m_root.BytesPerIndexBuffer == 0);
 	assert(this->sizeInBytes() / this->m_root.BytesPerIndexBuffer <= (this->m_bitmapLoader.sizeInBytes() * 8));
 
-	//If the bit is clear, simply skip this allocation buffer
-	if (!this->m_bitmap.get(this->m_blockNo)) {
-		this->m_blockNo++;
-		return this->m_root.BytesPerIndexBuffer;
-	}
-
 	/*
 	INDEX_ALLOCATION is stored in Index Allocation Buffers (Blocks).
 	Each block contains fixups which have to be applied.
@@ -126,13 +131,19 @@ size_t DirIndexProcessor::tryReadEntry(byte* buf, size_t len)
 	if (len < this->m_root.BytesPerIndexBuffer)
 		return 0;
 
+	//If the bit is clear, simply skip this allocation buffer
+	if (!this->m_bitmap.get(this->m_blockNo)) {
+		this->m_blockNo++;
+		return this->m_root.BytesPerIndexBuffer;
+	}
+
 	auto header = (INDEX_ALLOCATION_BUFFER*)buf;
 	sectorsCheckSignature(header->MultiSectorHeader, SIGNATURE_INDX);
 
 	auto BytesPerSector = vol->volumeData().BytesPerSector;
 	sectorsApplyFixups(&header->MultiSectorHeader, this->m_root.BytesPerIndexBuffer / BytesPerSector, BytesPerSector);
 
-	this->readIndexEntries(&header->IndexHeader);
+	this->processIndexAllocationBuffer(header);
 
 	this->m_blockNo++;
 	return this->m_root.BytesPerIndexBuffer;
@@ -148,13 +159,8 @@ Maybe that's good because this system is designed for selective reading of whole
 not for streaming that we do now.
 Let's remain compatible.
 */
-void DirIndexProcessor::readIndexEntries(INDEX_HEADER* header)
+void IndexProcessor::readIndexEntries(INDEX_HEADER* header)
 {
-	//NTFS groups intermediate (non-leaf) entries into non-leaf blocks.
-	//Since we're not interested in those, skip the whole block.
-	if ((header->Flags & INDEX_NODE) != 0)
-		return;
-
 	auto data = (byte*)header + header->FirstIndexEntry;
 	assert(header->FirstFreeByte > header->FirstIndexEntry);
 	auto len = header->FirstFreeByte - header->FirstIndexEntry;
@@ -177,10 +183,31 @@ void DirIndexProcessor::readIndexEntries(INDEX_HEADER* header)
 }
 
 //Reads INDEX_ENTRY which is the same for $INDEX_ALLOCATION and $INDEX_ROOT.
-size_t DirIndexProcessor::tryReadIndexEntry(byte* buf, size_t len)
+//Override to do something useful with the entry.
+size_t IndexProcessor::tryReadIndexEntry(byte* buf, size_t len)
 {
-	//Terminator entries are 16 bytes! Less than sizeof(INDEX_ENTRY).
-	if (len < INDEX_ENTRY_MIN_SIZE) return 0;
+	if (len < sizeof(INDEX_ENTRY)) return 0;
+
+	auto entry = (INDEX_ENTRY*)buf;
+	if (len < entry->Length) return 0;
+
+	return entry->Length;
+}
+
+
+void DirIndexReader::readIndexEntries(INDEX_HEADER* header)
+{
+	//NTFS groups intermediate (non-leaf) entries into non-leaf blocks.
+	//Since we're not interested in those, skip the whole block.
+	if ((header->Flags & INDEX_NODE) != 0)
+		return;
+
+	IndexProcessor::readIndexEntries(header);
+}
+
+size_t DirIndexReader::tryReadIndexEntry(byte* buf, size_t len)
+{
+	if (len < sizeof(INDEX_ENTRY)) return 0;
 
 	auto entry = (INDEX_ENTRY*)buf;
 	if (len < entry->Length) return 0;
@@ -198,7 +225,7 @@ size_t DirIndexProcessor::tryReadIndexEntry(byte* buf, size_t len)
 	DirIndexEntry dirEntry;
 	assert(entry->FileReference.mergedValue != 0, "Leaf index nodes must have valid references");
 	dirEntry.segmentNo = entry->FileReference.segmentNumber();
-	dirEntry.filename = AttrFilename(&entry->FileName).name();
+	dirEntry.filename = AttrFilename(&entry->fileName()).name();
 
 	this->entries.push_back(dirEntry);
 	return entry->Length;
@@ -206,8 +233,57 @@ size_t DirIndexProcessor::tryReadIndexEntry(byte* buf, size_t len)
 
 
 
+SegmentIndexesLoader::SegmentIndexesLoader(Mft& mft)
+	: MultiSegmentFileLoader(mft.vol)
+{
+}
+
+//Override to return IndexProcessors for the indexes you're interested in.
+IndexProcessor* SegmentIndexesLoader::getIndexProcessor(const std::string& indexName)
+{
+	return nullptr;
+}
+
+void SegmentIndexesLoader::advanceIndexes()
+{
+	//Override to call advance() on all the indexes you're processing.
+}
+
+void SegmentIndexesLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
+{
+	MultiSegmentFileLoader::loadSegment(segment);
+	this->advanceIndexes();
+}
+
+void SegmentIndexesLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
+{
+	MultiSegmentFileLoader::processAttr(attr);
+
+	auto attrName = attrNameStr(&attr);
+	if (attr.TypeCode == $BITMAP || attr.TypeCode == $INDEX_ROOT || attr.TypeCode == $INDEX_ALLOCATION) {
+		auto idx = this->getIndexProcessor(attrName);
+		if (!idx) return;
+
+		if (attr.TypeCode == $BITMAP)
+			idx->processBitmapAttr(attr);
+		if (attr.TypeCode == $INDEX_ROOT) {
+			assert(attr.FormCode == RESIDENT_FORM);
+			idx->processIndexRoot(attr.ResidentValuePtr(), attr.Form.Resident.ValueLength);
+		}
+		if (attr.TypeCode == $INDEX_ALLOCATION)
+			idx->addAttrChunk(&attr);
+	}
+
+	//Do not do advance() here as very often we'll lack $BITMAP or $INDEX_ROOT and simply read out all available data, blowing up the buffers.
+	//Do it after the complete segment load.
+	//This way if this is a single-segment entry, we simply process it after gathering all the info.
+	//Multi-segment entries will still be parsed fine.
+}
+
+
+
 DirEntryLoader::DirEntryLoader(Mft& mft)
-	: MultiSegmentFileLoader(mft.vol), DirIndexProcessor(mft.vol)
+	: MultiSegmentFileLoader(mft.vol), DirIndexReader(mft.vol)
 {
 }
 
@@ -216,7 +292,6 @@ void DirEntryLoader::loadSegment(FILE_RECORD_SEGMENT_HEADER* segment)
 	if (segment->BaseFileRecordSegment.mergedValue == 0)
 		this->isDir = (segment->Flags & FILE_FILE_NAME_INDEX_PRESENT);
 	MultiSegmentFileLoader::loadSegment(segment);
-	this->m_bitmapLoader.advance(); //In case it was non-resident
 	this->advance();
 }
 
@@ -235,13 +310,14 @@ void DirEntryLoader::processAttr(ATTRIBUTE_RECORD_HEADER& attr)
 		this->processIndexRoot(attr.ResidentValuePtr(), attr.Form.Resident.ValueLength);
 	}
 	if (attr.TypeCode == $INDEX_ALLOCATION && attrName == "$I30") {
- 		this->addAttrChunk(&attr);
+		this->addAttrChunk(&attr);
 	}
 	//Do not do advance() here as very often we'll lack $BITMAP or $INDEX_ROOT and simply read out all available data, blowing up the buffers.
 	//Do it after the complete segment load.
 	//This way if this is a single-segment entry, we simply process it after gathering all the info.
 	//Multi-segment entries will still be parsed fine.
 }
+
 
 
 //It was a great idea to store everything in UTF-8 but now we need string comparison, damn

@@ -46,6 +46,16 @@ void NonResidentData::addAttrChunk(ATTRIBUTE_RECORD_HEADER* attr) {
 	std::sort(m_vcnMap.begin(), m_vcnMap.end(), [](const VcnMapEntry& a, const VcnMapEntry& b) { return a.vcnStart < b.vcnStart; });
 }
 
+void NonResidentData::addDataRun(const VcnMapEntry& run)
+{
+	m_vcnMap.push_back(run);
+}
+
+void NonResidentData::sortDataRuns()
+{
+	std::sort(m_vcnMap.begin(), m_vcnMap.end(), [](const VcnMapEntry& a, const VcnMapEntry& b) { return a.vcnStart < b.vcnStart; });
+}
+
 void NonResidentData::readAll(void* buf)
 {
 	auto BytesPerCluster = vol->volumeData().BytesPerCluster;
@@ -108,6 +118,21 @@ void AttributeCollectorProcessor::processResidentAttr(ATTRIBUTE_RECORD_HEADER& a
 	this->dataHeader = attr;
 	assert(attr.FormCode == RESIDENT_FORM);
 	this->processData(attr.ResidentValuePtr(), attr.Form.Resident.ValueLength);
+	this->m_vcnEof = true;
+}
+
+//A version for cases where you only have the resident attribute data (e.g. index entry).
+//Extremely fakey everything.
+void AttributeCollectorProcessor::processResidentAttr(byte* data, size_t len)
+{
+	this->dataHeader.RecordLength = sizeof(this->dataHeader); //Pretend it's populated
+	this->dataHeader.NameLength = 0;
+	this->dataHeader.FormCode = RESIDENT_FORM;
+	this->dataHeader.Form.Resident.ValueLength = len;
+	this->dataHeader.Form.Resident.ResidentFlags = 0;
+	this->dataHeader.Flags = 0;
+	this->dataHeader.TypeCode = 0; //We don't know!
+	this->processData(data, len);
 	this->m_vcnEof = true;
 }
 

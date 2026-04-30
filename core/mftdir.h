@@ -65,8 +65,7 @@ public:
 
 
 /*
-Processes resident and non-resident $INDEX_ROOT and $INDEX_ALLOCATION attributes, extracts and collects INDEX_ENTRYes.
-Plain version: We do not care about the tree structure.
+Processes resident and non-resident $INDEX_ROOT and $INDEX_ALLOCATION attributes.
 
 Filter attributes and only pass us those with the same name ($I30 for dirs).
 The NonResidentDataProcessor here is meant for $INDEX_ALLOCATION chunks. Pass them normally,
@@ -80,11 +79,7 @@ In general, we cannot start processing INDEX_ALLOCATION until we have compiled B
 We could track the VCN map loading extent for the BITMAP and allow INDEX_ALLOCATION
 processing accordingly, but it's a bother.
 */
-struct DirIndexEntry {
-	SegmentNumber segmentNo;
-	std::string filename;
-};
-class DirIndexProcessor : public AttributeCollectorProcessor {
+class IndexProcessor : public AttributeCollectorProcessor {
 protected:
 	INDEX_ROOT m_root;
 	inline bool haveIndexRoot() { return this->m_root.BytesPerIndexBuffer > 0; }
@@ -93,22 +88,62 @@ protected:
 	int m_blockNo = 0;
 
 	virtual size_t tryReadEntry(byte* buf, size_t len) override;
-	void readIndexEntries(INDEX_HEADER* header);
-	size_t tryReadIndexEntry(byte* buf, size_t len);
-public:
-	std::vector<DirIndexEntry> entries;
 
-	DirIndexProcessor(Volume* vol);
+	//Normally you shouldn't call this directly. Will be called automatically from tryReadEntry when we have enough data.
+	//Override if you need additional processing on de-fixuped valid used allocation buffers.
+	virtual void processIndexAllocationBuffer(INDEX_ALLOCATION_BUFFER* buffer);
+
+	virtual void readIndexEntries(INDEX_HEADER* header);
+	virtual size_t tryReadIndexEntry(byte* buf, size_t len);
+public:
+	IndexProcessor(Volume* vol);
+
+	virtual int advance() override;
 
 	//Pass index root here. It's always resident, only one instance of it in the multi-segment file.
-	void processIndexRoot(void* data, size_t len);
+	virtual void processIndexRoot(void* data, size_t len);
 
 	//Pass matching $BITMAP here. Resident or non-resident.
 	void processBitmapAttr(ATTRIBUTE_RECORD_HEADER& attr);
 };
 
+/*
+IndexProcessor that extracts and collects INDEX_ENTRYes.
+Plain version: We do not care about the tree structure.
+*/
+struct DirIndexEntry {
+	SegmentNumber segmentNo;
+	std::string filename;
+};
+class DirIndexReader : public IndexProcessor {
+public:
+	std::vector<DirIndexEntry> entries;
+	using IndexProcessor::IndexProcessor;
+	virtual void readIndexEntries(INDEX_HEADER* header) override;
+	virtual size_t tryReadIndexEntry(byte* buf, size_t len) override;
+};
 
-class DirEntryLoader : public MultiSegmentFileLoader, public DirIndexProcessor
+
+
+/*
+Loads or collects multi-segment file and gathers information about all of its indexes.
+*/
+class SegmentIndexesLoader : public MultiSegmentFileLoader
+{
+public:
+	SegmentIndexesLoader(Mft& mft);
+	virtual IndexProcessor* getIndexProcessor(const std::string& indexName);
+	virtual void advanceIndexes();
+	virtual void loadSegment(FILE_RECORD_SEGMENT_HEADER* segment) override;
+	virtual void processAttr(ATTRIBUTE_RECORD_HEADER& attr) override;
+};
+
+
+
+/*
+Same, but only gathers $I30 + FILE_NAME attribute. Useful for directory reading.
+*/
+class DirEntryLoader : public MultiSegmentFileLoader, public DirIndexReader
 {
 public:
 	//The entry we've been tasked with loading is indeed marked as a directory.

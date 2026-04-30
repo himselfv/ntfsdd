@@ -55,6 +55,8 @@ public:
 	//Some files can be sparse but sometimes we legit need to check there are no holes:
 	VCN getFirstMissingVcn();
 	void addAttrChunk(ATTRIBUTE_RECORD_HEADER* attr);
+	void addDataRun(const VcnMapEntry& run);
+	void sortDataRuns();
 	//Even though this is called NonResidentData, descendants use us for all sorts of things so let's try to be compatible.
 	inline int64_t sizeInBytes() {
 		if (this->dataHeader.FormCode == RESIDENT_FORM)
@@ -117,6 +119,7 @@ public:
 	//Process the resident version of the attribute. Has to be the ONLY instance of this attribute.
 	//Be careful! Your tryReadMore() has to be ready for RESIDENT_FORM of the ATTRIBUTE_RECORD_HEADER dataHeader.
 	void processResidentAttr(ATTRIBUTE_RECORD_HEADER& attr);
+	void processResidentAttr(byte* data, size_t len);
 
 	//Process a complete independent chunk of data, usually from a resident version of the attribute.
 	//Be careful! Only works if your tryReadMore() is ATTRIBUTE_RECORD_HEADER-independent.
@@ -124,7 +127,7 @@ public:
 
 	//When processing segments and encountering a non-resident attribute chunk, call base addDataAttr() + advance()
 	//This will scan all currently available new sequential data and process any complete entry.
-	int advance();
+	virtual int advance();
 
 	//Asserts that this attribute is either missing or has been completely processed, with no unprocessed data left.
 	inline void assert_all_processed() {
