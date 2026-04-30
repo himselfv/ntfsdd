@@ -96,8 +96,12 @@ void MftScan::scan()
 		scanStats.usedSegments++;
 
 		this->processValidSegment();
-
 	}
+
+	//On completion, scan filemap and mark all clusters for the dirty multisegments
+	for (auto& pair : filemap)
+		if (pair.second.multisegment)
+			finalizeFileEntry(pair.first, pair.second);
 }
 
 //Called for every MFT segment, valid or not.
@@ -127,6 +131,9 @@ void MftScan::processValidSegment()
 	//Process the attributes
 	this->processAttributes(segmentNo, segmentEntry, srcIt.segment);
 
+	//Mark single-segment files immediately
+	if (!segmentEntry->multisegment)
+		this->finalizeFileEntry(segmentNo, *segmentEntry);
 }
 
 
@@ -199,6 +206,10 @@ void MftScan::processAttributes(SegmentNumber segmentNo, FileEntry* segmentEntry
 			segmentEntry->runList.push_back(run);
 		}
 	}
+}
+
+void MftScan::finalizeFileEntry(const SegmentNumber segmentNo, const FileEntry& fi)
+{
 }
 
 
@@ -315,12 +326,6 @@ void MftDiff::scan()
 {
 	MftScan::scan();
 
-	//On completion, scan filemap and mark all clusters for the dirty multisegments
-	for (auto& pair : filemap)
-		if (pair.second.dirty && pair.second.multisegment) {
-			this->onDirtyFile(pair.first, pair.second);
-		}
-
 #ifdef MFTDIFF_EXTRA_CHECKS
 	size_t totalDirtyClustersAgain = 0;
 	for (auto& pair : filemap)
@@ -434,8 +439,8 @@ void MftDiff::processValidSegment()
 	this->processAttributes(segmentNo, segmentEntry, srcIt.segment);
 
 	//Mark single-segment files immediately
-	if (dirty && !segmentEntry->multisegment)
-		this->onDirtyFile(segmentNo, *segmentEntry);
+	if (!segmentEntry->multisegment)
+		this->finalizeFileEntry(segmentNo, *segmentEntry);
 }
 
 
@@ -466,6 +471,12 @@ FileEntry* MftDiff::selectSegmentEntry()
 }
 
 
+void MftDiff::finalizeFileEntry(const SegmentNumber segmentNo, const FileEntry& fi)
+{
+	if (fi.dirty) {
+		this->onDirtyFile(segmentNo, fi);
+	}
+}
 
 void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
 {

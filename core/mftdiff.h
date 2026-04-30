@@ -61,7 +61,7 @@ protected: //Current entry being processed
 	bool segmentDirty = false;
 	FileEntry tempSegmentEntry {};
 	virtual FileEntry* selectSegmentEntry();
-
+	virtual void finalizeFileEntry(const SegmentNumber segmentNo, const FileEntry& fi);
 
 public:
 	Mft& mftSrc;
@@ -121,6 +121,7 @@ protected: //Current entry being processed
 	SegmentIterator destEnd {nullptr, 0};
 	bool dirty = false;
 	virtual FileEntry* selectSegmentEntry();
+	virtual void finalizeFileEntry(const SegmentNumber segmentNo, const FileEntry& fi) override;
 
 public:
 	Mft& mftDest;
