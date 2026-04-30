@@ -11,12 +11,8 @@
 #include "mftdir.h"
 #include "mftutil.h"
 #include "bitmap.h"
-/*
---dump-segment
---print-segment
---dump-cluster
---list-dir
-*/
+#include "printers\segmentprint.h"
+
 
 
 //Volume + its MFT.
@@ -33,201 +29,155 @@ public:
 	}
 };
 
-void dumpRaw(void* data, size_t sz)
-{
-	char* ptr = (char*)data;
-	auto& cout = std::cout;
-	while (sz > 0) {
-		cout << *ptr;
-		ptr++;
-		sz--;
-	}
-	cout << std::endl;
-}
 
-void dumpHex(void* data, size_t sz, int lineSize)
+std::string indexHeaderFlagsToString(USHORT flags)
 {
-	const char* hex = "0123456789ABCDEF";
-	char* ptr = (char*)data;
-	auto& cout = std::cout;
-	while (sz > 0) {
-		for (auto i = 0; i < (sz >= lineSize ? lineSize : sz); i++) {
-			cout << hex[(*ptr & 0xF0) >> 4] << hex[(*ptr) & 0x0F];
-			ptr++;
-		}
-		cout << std::endl;
-		sz -= (sz >= lineSize ? lineSize : sz);
-	}
-}
-
-std::string segmentRefToStr(MFT_SEGMENT_REFERENCE& ref)
-{
-	if (ref.mergedValue == 0)
-		return "none";
-	else
-		return std::to_string(ref.segmentNumber()) + " rev" + std::to_string(ref.classic.SequenceNumber);
-}
-
-std::string attrTypeToStr(ATTRIBUTE_TYPE_CODE type)
-{
-	switch (type) {
-	case $STANDARD_INFORMATION: return "$STANDARD_INFORMATION"; break;
-	case $ATTRIBUTE_LIST: return "$ATTRIBUTE_LIST"; break;
-	case $FILE_NAME: return "$FILE_NAME"; break;
-	case $OBJECT_ID: return "$OBJECT_ID"; break;
-	case $SECURITY_DESCRIPTOR: return "$SECURITY_DESCRIPTOR"; break;
-	case $VOLUME_NAME: return "$VOLUME_NAME"; break;
-	case $VOLUME_INFORMATION: return "$VOLUME_INFORMATION"; break;
-	case $DATA: return "$DATA"; break;
-	case $INDEX_ROOT: return "$INDEX_ROOT"; break;
-	case $INDEX_ALLOCATION: return "$INDEX_ALLOCATION"; break;
-	case $BITMAP: return "$BITMAP"; break;
-	case $SYMBOLIC_LINK: return "$SYMBOLIC_LINK"; break;
-	case $EA_INFORMATION: return "$EA_INFORMATION"; break;
-	case $EA: return "$EA"; break;
-	default:
-		return std::string{ "ATTR$" }+std::to_string(type);
-	}
-}
-
-std::string fileAttributesToString(ULONG attrs)
-{
-	std::string result {};
-	if (attrs & FAT_DIRENT_ATTR_READ_ONLY) result += "READ_ONLY ";
-	if (attrs & FAT_DIRENT_ATTR_HIDDEN) result += "HIDDEN ";
-	if (attrs & FAT_DIRENT_ATTR_SYSTEM) result += "SYSTEM ";
-	if (attrs & FAT_DIRENT_ATTR_VOLUME_ID) result += "VOLUME_ID ";
-	if (attrs & FAT_DIRENT_ATTR_ARCHIVE) result += "ARCHIVE ";
-	if (attrs & FAT_DIRENT_ATTR_DEVICE) result += "DEVICE ";
+	std::string result{};
+	if (flags & INDEX_NODE) result += " NODE";
+	flags &= ~(INDEX_NODE);
+	if (flags != 0)
+		result += " FLAGS_" + flagsToStr(flags);
 	return result;
 }
 
+std::string indexEntryFlagsToString(USHORT flags)
+{
+	std::string result{};
+	if (flags & INDEX_ENTRY_NODE) result += " NODE";
+	if (flags & INDEX_ENTRY_END) result += " END";
+	flags &= ~(INDEX_ENTRY_NODE | INDEX_ENTRY_END);
+	if (flags != 0)
+		result += " FLAGS_" + flagsToStr(flags);
+	return result;
+}
 
-class SegmentPrinter
+void printIndexHeader(INDEX_HEADER& header)
+{
+	std::cout << "BytesAv: " << header.BytesAvailable;
+	std::cout << " FirstFreeByte: " << header.FirstFreeByte;
+	std::cout << " FirstIndexEntry: " << header.FirstIndexEntry;
+	std::cout << " Flags: " << indexHeaderFlagsToString(header.Flags);
+	std::cout << std::endl;
+}
+
+void printIndexRootHeader(INDEX_ROOT& header)
+{
+	std::cout << "AttrType: " << attrTypeToStr(header.IndexedAttributeType);
+	std::cout << " PerIndexBuffer: Bytes=" << header.BytesPerIndexBuffer << ", Blocks=" << header.BlocksPerIndexBuffer;
+	std::cout << " Collation: " << collationRuleToStr(header.CollationRule);
+	printIndexHeader(header.IndexHeader);
+}
+
+void printIndexAllocationBufferHeader(INDEX_ALLOCATION_BUFFER& header)
+{
+	printMultiSectorHeader(header.MultiSectorHeader, header.Lsn);
+	std::cout << ", ThisBlock: " << header.ThisBlock << std::endl;
+	printIndexHeader(header.IndexHeader);
+}
+
+
+class IndexPrinter : public IndexProcessor, public SegmentPrinter
+{
+public:
+	IndexPrinter(Mft& mft)
+		: IndexProcessor(mft.vol), SegmentPrinter(mft)
+	{}
+	virtual void processIndexRoot(void* data, size_t len) override;
+	virtual void processIndexAllocationBuffer(INDEX_ALLOCATION_BUFFER* buffer) override;
+	virtual size_t tryReadIndexEntry(byte* buf, size_t len) override;
+};
+
+
+void IndexPrinter::processIndexRoot(void* data, size_t len)
+{
+	//Print the header before the inherited implementation parses index entries and we print them
+	//Do minimal asserts, only enough for our printing. The rest is in the inherited.
+	assert(len >= sizeof(INDEX_ROOT));
+	auto header = (INDEX_ROOT*)data;
+
+	printIndexRootHeader(*(INDEX_ROOT*)data);
+
+	IndexProcessor::processIndexRoot(data, len);
+}
+
+void IndexPrinter::processIndexAllocationBuffer(INDEX_ALLOCATION_BUFFER* buffer)
+{
+	printIndexAllocationBufferHeader(*buffer);
+}
+
+size_t IndexPrinter::tryReadIndexEntry(byte* buf, size_t len)
+{
+	if (len < sizeof(INDEX_ENTRY)) return 0;
+
+	auto entry = (INDEX_ENTRY*)buf;
+	if (len < entry->Length) return 0;
+
+	//These are always available
+	std::cout << "Ref: " << segmentRefToStr(entry->FileReference);
+	std::cout << " Len: " << entry->Length;
+	std::cout << " AttrLen: " << entry->AttributeLength;
+	std::cout << " Flags: " << indexEntryFlagsToString(entry->Flags); //INDEX_ENTRY_END and INDEX_ENTRY_NODE
+
+	//The remainder depends on the flags
+
+	//If this is an intermediate node it should have VCN in addition to ATTRIBUTE_LENGTH.
+	if (entry->Flags & INDEX_ENTRY_NODE) {
+		if (entry->Length < sizeof(INDEX_ENTRY) + entry->AttributeLength + sizeof(VCN))
+			std::cout << std::endl << "INDEX_ENTRY too small for its flags!";
+		else {
+			auto vcn = (VCN*)((byte*)entry + entry->Length - sizeof(VCN));
+			std::cout << " VCN: " << vcn << std::endl;
+		}
+	}
+
+	int64_t extraBytes = (int64_t)entry->Length - sizeof(INDEX_ENTRY);
+	if (entry->Flags & INDEX_ENTRY_NODE)
+		extraBytes -= sizeof(VCN);
+
+	if (entry->Flags & INDEX_ENTRY_END) {
+		//Do not subtract AttributeLength here as there's not supposed to be attribute value here.
+		//If it's non-zero, let the check at the end catch the discrepancy. AttributeLength is visible anyway as it's printed.
+	} else {
+		extraBytes -= entry->AttributeLength;
+		this->printAttrResidentValue(this->m_root.IndexedAttributeType, entry->attributeData(), entry->AttributeLength);
+	}
+
+	if (extraBytes > 0)
+		std::cout << "Additional " << extraBytes << "bytes in an entry!";
+
+	return entry->Length;
+}
+
+class SegmentIndexesPrinter : public SegmentIndexesLoader
 {
 protected:
-	Volume2& vol;
+	Mft& m_mft;
 public:
-	SegmentPrinter(Volume2& vol)
-		: vol(vol)
+	SegmentIndexesPrinter(Mft& mft)
+		: SegmentIndexesLoader(mft), m_mft(mft)
 	{}
-
-	void printFilenameAttr(ATTRIBUTE_RECORD_HEADER& attr)
-	{
-		AttrFilename fn{ &attr };
-		std::cout << "  Filename: " << AttrFilename(&attr).name() << std::endl;
-		std::cout << "  Parent dir: " << segmentRefToStr(fn.fn->ParentDirectory) << std::endl;
-		std::cout << "  Flags: " << (USHORT)(fn.fn->Flags);
-		if (fn.fn->Flags & FILE_NAME_NTFS) std::cout << " NTFS";
-		if (fn.fn->Flags & FILE_NAME_DOS) std::cout << " DOS";
-		std::cout << std::endl;
-	}
-
-	void printStandardInformationAttr(ATTRIBUTE_RECORD_HEADER& attr)
-	{
-		int64_t size = attr.Form.Resident.ValueLength;
-		auto& sa = *((STANDARD_INFORMATION*)attr.ResidentValuePtr());
-
-		std::cout << "  Creation: " << sa.CreationTime;
-		std::cout << " LastMod: " << sa.LastModificationTime;
-		std::cout << " LastChange: " << sa.LastChangeTime;
-		std::cout << " LastAcc: " << sa.LastAccessTime;
-		std::cout << std::endl;
-
-		std::cout << "  FileAttrs: " << fileAttributesToString(sa.FileAttributes) << std::endl;
-		std::cout << "  MaximumVersions: " << sa.MaximumVersions;
-		std::cout << " VersionNumber: " << sa.VersionNumber << std::endl;
-
-		if (size >= offsetof(STANDARD_INFORMATION, SecurityId) + sizeof(STANDARD_INFORMATION::SecurityId)) {
-			std::cout << "  ClassId: " << sa.ClassId
-				<< " OwnerId: " << sa.OwnerId
-				<< " SecurityId: " << sa.SecurityId
-				<< std::endl;
-		}
-		if (size >= offsetof(STANDARD_INFORMATION, QuotaCharged) + sizeof(STANDARD_INFORMATION::QuotaCharged)) {
-			std::cout << "  QuotaCharged: " << sa.QuotaCharged << std::endl;
-		}
-		if (size >= offsetof(STANDARD_INFORMATION, Usn) + sizeof(STANDARD_INFORMATION::Usn)) {
-			std::cout << "  Usn: " << sa.Usn << std::endl;
-		}
-	}
-
-	void printAttributeListAttr(ATTRIBUTE_RECORD_HEADER& attr)
-	{
-		AttributeListProcessor proc(&vol);
-
-		if (attr.FormCode == RESIDENT_FORM)
-			proc.processResidentAttr(attr);
-		else {
-			if (attr.Form.Nonresident.LowestVcn != 0) {
-				std::cout << "WARNING: $ATTRIBUTE_LIST chunk with LowestVcn!=0. This is very rare. In this simplified tool we cannot parse this." << std::endl;
-				//We try to in the main ntfsdd though.
-				return;
-			}
-			proc.addAttrChunk(&attr);
-			proc.advance();
-		}
-		for (auto& entry : proc.segments)
-			std::cout << "  Segment: " << entry << std::endl;
-		if (!proc.eof())
-			std::cout << "WARNING: Unprocessed data left in $ATTRIBUTE_LIST. Likely to be chunked $ATTRIBUTE_LIST. This is very rare. In this simplified tool we cannot parse this." << std::endl;
-	}
-
-	void printAttr(ATTRIBUTE_RECORD_HEADER& attr)
-	{
-		std::cout << attrTypeToStr(attr.TypeCode) << " len=" << attr.RecordLength << " flags=" << attr.Flags;
-		if (attr.Flags & ATTRIBUTE_FLAG_COMPRESSION_MASK) std::cout << " COMPRESSION_MASK";
-		if (attr.Flags & ATTRIBUTE_FLAG_SPARSE) std::cout << " SPARSE";
-		if (attr.Flags & ATTRIBUTE_FLAG_ENCRYPTED) std::cout << " ENCRYPTED";
-		std::cout << std::endl;
-		std::cout << "  Instance: " << attr.Instance << std::endl;
-		std::cout << "  Name: " << attrNameStr(&attr) << std::endl;
-		if (attr.FormCode == RESIDENT_FORM) {
-			std::cout << "  Resident: Data=" << attr.Form.Resident.ValueOffset << "+" << attr.Form.Resident.ValueLength << ", Flags=" << ((USHORT)attr.Form.Resident.ResidentFlags) << std::endl;
-			//Dump extended info on some attributes
-			if (attr.TypeCode == $FILE_NAME)
-				printFilenameAttr(attr);
-			if (attr.TypeCode == $STANDARD_INFORMATION)
-				printStandardInformationAttr(attr);
-			if (attr.TypeCode == $ATTRIBUTE_LIST)
-				printAttributeListAttr(attr);
-		}
-		else if (attr.FormCode == NONRESIDENT_FORM) {
-			std::cout << "  Non-resident: VCN=" << attr.Form.Nonresident.LowestVcn << "-" << attr.Form.Nonresident.HighestVcn << std::endl;
-			std::cout << "  Size=" << attr.Form.Nonresident.FileSize << ", Valid=" << attr.Form.Nonresident.ValidDataLength
-				<< ", Alloc=" << attr.Form.Nonresident.AllocatedLength << ", Total=" << attr.Form.Nonresident.TotalAllocated
-				<< std::endl
-				;
-			for (auto& run : DataRunIterator(&attr))
-				std::cout << "    Run: " << run.offset << "+" << run.length << std::endl;
-		}
-		else {
-			std::cout << "  UNKNOWN FORM: " << attr.FormCode << std::endl;
-		}
-	}
-
-	void printSegment(FILE_RECORD_SEGMENT_HEADER* segment)
-	{
-		std::cout << segment->MultiSectorHeader.Signature;
-		std::cout << ", BaseSegment: " << segmentRefToStr(segment->BaseFileRecordSegment);
-		std::cout << ", LSN: " << segment->Lsn << std::endl;
-
-		std::cout << "SequenceNumber: " << segment->SequenceNumber << " ReferenceCount: " << segment->ReferenceCount << std::endl;
-
-		std::cout << "Flags: " << std::to_string(segment->Flags);
-		if (segment->Flags & FILE_RECORD_SEGMENT_IN_USE) std::cout << " IN_USE";
-		if (segment->Flags & FILE_FILE_NAME_INDEX_PRESENT) std::cout << " FILE_NAME_INDEX_PRESENT";
-		std::cout << std::endl;
-
-		std::cout << "Update sequence: offset=" << segment->MultiSectorHeader.UpdateSequenceArrayOffset
-			<< ", size=" << segment->MultiSectorHeader.UpdateSequenceArraySize << std::endl;
-		std::cout << "Bytes: available=" << segment->BytesAvailable << ", firstFree=" << segment->FirstFreeByte << std::endl;
-		std::cout << "Attrs: firstOffset=" << segment->FirstAttributeOffset << ", nextInst=" << segment->NextAttributeInstance << std::endl;
-
-		for (ATTRIBUTE_RECORD_HEADER& attr : AttributeIterator(segment))
-			printAttr(attr);
-	}
+	std::unordered_map<std::string, IndexPrinter> indexes;
+	virtual IndexProcessor* getIndexProcessor(const std::string& indexName);
+	virtual void advanceIndexes();
 };
+
+//Override to return IndexProcessors for the indexes you're interested in.
+IndexProcessor* SegmentIndexesPrinter::getIndexProcessor(const std::string& indexName)
+{
+	auto it = this->indexes.find(indexName);
+	if (it == this->indexes.end()) {
+		it = this->indexes.emplace(indexName, IndexPrinter(this->m_mft)).first;
+	}
+	return &(it->second);
+}
+
+void SegmentIndexesPrinter::advanceIndexes()
+{
+	for (auto& pair : this->indexes) {
+		pair.second.advance();
+	}
+}
+
 
 
 class DirIndexPrinter
@@ -236,7 +186,7 @@ protected:
 	DirectoryTreeLoader* dirTree = nullptr;
 	//Protect against duplicate names in the same dir (very common) + against recursion.
 	//Could have done the same on each dir's level (duplicates) + another set/stack for recursion, but whatever.
-	std::unordered_set<SegmentNumber> visited {};
+	std::unordered_set<SegmentNumber> visited{};
 
 
 	void print(SegmentNumber segmentNo, const std::string& offset, bool recursive, bool force)
@@ -281,8 +231,6 @@ public:
 		this->print(dirNo, "", recursive, true);
 	}
 };
-
-
 
 int main2(int argc, char* argv[]) {
 	CLI::App app{};
@@ -365,6 +313,11 @@ int main2(int argc, char* argv[]) {
 		->delimiter(',');
 
 
+
+	std::unordered_set<SegmentNumber> printIndexes{};
+	app.add_option("--print-indexes", printIndexes, "Print indexes for this MFT entry.")
+		->group("Processing options")
+		->delimiter(',');
 
 
 	bool quiet = false;
@@ -471,7 +424,7 @@ int main2(int argc, char* argv[]) {
 	}
 
 
-	SegmentPrinter segPrinter(src);
+	SegmentPrinter segPrinter(*src.mft);
 
 	buf.resize(src.mft->BytesPerFileSegment);
 	for (auto& idx : printSegments) {
@@ -479,6 +432,16 @@ int main2(int argc, char* argv[]) {
 		src.mft->readSegmentByIndex(idx, segment);
 		std::cout << std::endl << "Segment #" << std::to_string(idx) << ":" << std::endl;
 		segPrinter.printSegment(segment);
+	}
+
+
+	for (auto& segmentNo : printIndexes) {
+		SegmentIndexesPrinter printer(*src.mft);
+		printer.load(*src.mft, segmentNo);
+		for (auto& pair : printer.indexes) {
+			std::cout << "Index " << pair.first << ":" << std::endl;
+			//TODO: print.
+		}
 	}
 
 
