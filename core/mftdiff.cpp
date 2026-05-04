@@ -396,33 +396,33 @@ void MftDiff::processValidSegment()
 	//in case it later turns out we *had* to register them somewhere.
 	//Parsing the attrs twice is cheaper these memory ops.
 	//We need to gather some other information too.
-	if (baseSegmentNumber < 0)
-		for (auto& attr : AttributeIterator(srcIt.segment))
-			if (attr.TypeCode == $ATTRIBUTE_LIST) {
+	for (auto& attr : AttributeIterator(srcIt.segment))
+		if (attr.TypeCode == $ATTRIBUTE_LIST) {
+			if (baseSegmentNumber < 0)
 				baseSegmentNumber = segmentNo;
-			}
-			else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty && !dirty) {
-				dirty = true;
-				diffStats.dirtyBecauseOfIndex++;
-			}
-			else if (attr.TypeCode == $FILE_NAME && !dirty) {
-				//Any time a file is included in a dir, it gets another $FILE_NAME with backreference to that dir
-				AttrFilename attrFn{ &attr };
-				if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0) {
-					auto parentSegmentNo = attrFn.fn->ParentDirectory.segmentNumber();
-					//Any backreference to a dirtyRoot means the segment should be marked dirty.
-					if (dirtyRoots.find(parentSegmentNo) != dirtyRoots.end())
-					{
-						dirty = true;
-						diffStats.dirtyBecauseOfParent++;
-					}
-					//Any backreference to a skipRoot means the (multi)segment should be skipped
-					if (skipRoots.find(parentSegmentNo) != skipRoots.end())
-					{
-						setSkipFlag = true;
-					}
+		}
+		else if (attr.TypeCode == $INDEX_ALLOCATION && this->markAllIndexClustersDirty && !dirty) {
+			dirty = true;
+			diffStats.dirtyBecauseOfIndex++;
+		}
+		else if (attr.TypeCode == $FILE_NAME && !dirty) {
+			//Any time a file is included in a dir, it gets another $FILE_NAME with backreference to that dir
+			AttrFilename attrFn{ &attr };
+			if (attrFn.fn->ParentDirectory.classic.SequenceNumber != 0) {
+				auto parentSegmentNo = attrFn.fn->ParentDirectory.segmentNumber();
+				//Any backreference to a dirtyRoot means the segment should be marked dirty.
+				if (dirtyRoots.find(parentSegmentNo) != dirtyRoots.end())
+				{
+					dirty = true;
+					diffStats.dirtyBecauseOfParent++;
+				}
+				//Any backreference to a skipRoot means the (multi)segment should be skipped
+				if (skipRoots.find(parentSegmentNo) != skipRoots.end())
+				{
+					setSkipFlag = true;
 				}
 			}
+		}
 
 
 	//By this point we should have determined whether this local segment is dirty
