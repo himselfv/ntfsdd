@@ -488,12 +488,12 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 	skipOptions.add_option("--include-file", includes.files, "Always consider these particular files dirty. If it's a dir, only the dir segment itself is skipped. Careful! Wreaks havoc!")
 		->delimiter(',');
 
-	skipOptions.add_option("--standard-includes", bAddStandardIncludes, "Mark $Extend, System Volume Information and Boot dirs dirty wil all the content. Recommended.")
-		->delimiter(',');
+	skipOptions.add_option("--standard-includes", bAddStandardIncludes, "Mark $Extend, System Volume Information and Boot dirs dirty with all the content. Recommended.")
+		->capture_default_str();
 
 	bool bIgnoreFixupChanges = false;
 	skipOptions.add_option("--ignore-fixups", bIgnoreFixupChanges, "Consider segments unchanged if ONLY the fixup has changed.")
-		->delimiter(',');
+		->capture_default_str();
 
 	bool bMarkAllIndexClustersDirty = false;
 	skipOptions.add_flag("--all-index-dirty", bMarkAllIndexClustersDirty, "Mark all index allocations clusters as dirty. "

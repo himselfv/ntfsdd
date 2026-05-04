@@ -8,7 +8,7 @@ void dumpRaw(void* data, size_t sz);
 void dumpHex(void* data, size_t sz, int lineSize);
 
 std::string segmentRefToStr(MFT_SEGMENT_REFERENCE& ref);
-inline std::string flagsToStr(USHORT flags);
+inline std::string flagsToStr(ULONG flags);
 std::string segmentFlagsToString(USHORT flags);
 std::string attrTypeToStr(ATTRIBUTE_TYPE_CODE type);
 std::string attrFlagsToString(USHORT flags);

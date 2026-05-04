@@ -11,7 +11,8 @@ std::string binToHex(void* data, size_t sz, int lineSize)
 	std::string result {};
 	while (sz > 0) {
 		for (auto i = 0; i < (sz >= lineSize ? lineSize : sz); i++) {
-			result += hex[(*ptr & 0xF0) >> 4] + hex[(*ptr) & 0x0F];
+			result += hex[(*ptr & 0xF0) >> 4];
+			result += hex[(*ptr) & 0x0F];
 			ptr++;
 		}
 		result += "\n";
@@ -46,7 +47,7 @@ std::string segmentRefToStr(MFT_SEGMENT_REFERENCE& ref)
 		return std::to_string(ref.segmentNumber()) + " rev" + std::to_string(ref.classic.SequenceNumber);
 }
 
-inline std::string flagsToStr(USHORT flags)
+inline std::string flagsToStr(ULONG flags)
 {
 	return std::to_string(flags);
 }
