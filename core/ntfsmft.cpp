@@ -438,10 +438,10 @@ void Mft::load()
 	//Load and process all related segments sequentially, collecting attrList and (via processAttr) vcnMap/data.
 	MultiSegmentFileLoader::load(*this, 0);
 
-	assert(this->m_vcnMap.size() > 0); //MFT should not be empty
-	assert(this->m_vcnMap.front().lcnStart == this->vol->volumeData().MftStartLcn.QuadPart); //First cluster should match the one we started with
-	assert(this->getFirstMissingVcn() == (uint64_t)(-1)); //Should be no spaces in the MFT
-	assert(this->sizeInBytes() % this->BytesPerFileSegment == 0);
+	assert_gt(this->m_vcnMap.size(), 0); //MFT should not be empty
+	assert_eq(this->m_vcnMap.front().lcnStart, this->vol->volumeData().MftStartLcn.QuadPart); //First cluster should match the one we started with
+	assert_eq(this->getFirstMissingVcn(), (uint64_t)(-1)); //Should be no spaces in the MFT
+	assert_eq(this->sizeInBytes() % this->BytesPerFileSegment, 0);
 }
 
 //Called for every attribute chunk found in every segment related to the MFT
@@ -485,7 +485,7 @@ void Mft::readSegmentByIndex(SegmentNumber segmentNo, FILE_RECORD_SEGMENT_HEADER
 	vrbn.QuadPart %= BytesPerCluster;
 
 	auto lcn = this->getLcn(vcn);
-	assert(lcn >= 0);
+	assert_greq(lcn, 0);
 	vrbn.QuadPart += lcn * BytesPerCluster;
 
 	return this->readSegmentsVrbn(vrbn, segment, 1);

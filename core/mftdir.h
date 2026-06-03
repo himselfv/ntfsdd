@@ -60,6 +60,7 @@ protected:
 public:
 	size_t bytesProcessed = 0;
 	BitmapProcessor(Volume* vol, BitmapBuf& bitmap);
+	BitmapProcessor(BitmapProcessor&& other, BitmapBuf& bitmap);
 };
 
 
@@ -97,6 +98,7 @@ protected:
 	virtual size_t tryReadIndexEntry(byte* buf, size_t len);
 public:
 	IndexProcessor(Volume* vol);
+	IndexProcessor(IndexProcessor&& other);
 
 	virtual int advance() override;
 

@@ -52,6 +52,12 @@ BitmapProcessor::BitmapProcessor(Volume* vol, BitmapBuf& bitmap)
 {
 }
 
+//This class binds to the bitmap given to it. When writing move-constructors we have to use this ugly rebinder constructor
+BitmapProcessor::BitmapProcessor(BitmapProcessor&& other, BitmapBuf& bitmap)
+	: AttributeCollectorProcessor(std::move(other)), m_bitmap(bitmap)
+{
+}
+
 size_t BitmapProcessor::tryReadEntry(byte* buf, size_t len)
 {
 	if (!this->haveDataHeader()) return 0;
@@ -66,7 +72,14 @@ size_t BitmapProcessor::tryReadEntry(byte* buf, size_t len)
 
 
 IndexProcessor::IndexProcessor(Volume* vol)
-	: AttributeCollectorProcessor(vol), m_bitmapLoader(vol, m_bitmap)
+	: AttributeCollectorProcessor(vol), m_bitmap(), m_bitmapLoader(vol, m_bitmap)
+{
+	this->m_root.BytesPerIndexBuffer = 0; //Not initialized flag
+}
+
+//Move-constructor due to the interlinking weirdness in the bitmaps
+IndexProcessor::IndexProcessor(IndexProcessor&& other)
+	: AttributeCollectorProcessor(std::move(other.vol)), m_bitmap(std::move(other.m_bitmap)), m_bitmapLoader(std::move(other.m_bitmapLoader), m_bitmap)
 {
 	this->m_root.BytesPerIndexBuffer = 0; //Not initialized flag
 }

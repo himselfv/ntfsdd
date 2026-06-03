@@ -82,6 +82,10 @@ public:
 	IndexPrinter(Mft& mft)
 		: IndexProcessor(mft.vol), SegmentPrinter(mft)
 	{}
+	IndexPrinter(IndexPrinter&& other)
+		: IndexProcessor(std::move(other)), SegmentPrinter(std::move(other))
+	{}
+
 	virtual void processIndexRoot(void* data, size_t len) override;
 	virtual void processIndexAllocationBuffer(INDEX_ALLOCATION_BUFFER* buffer) override;
 	virtual size_t tryReadIndexEntry(byte* buf, size_t len) override;
@@ -95,7 +99,7 @@ void IndexPrinter::processIndexRoot(void* data, size_t len)
 	assert(len >= sizeof(INDEX_ROOT));
 	auto header = (INDEX_ROOT*)data;
 
-	printIndexRootHeader(*(INDEX_ROOT*)data);
+	printIndexRootHeader(*header);
 
 	IndexProcessor::processIndexRoot(data, len);
 }
@@ -143,7 +147,7 @@ size_t IndexPrinter::tryReadIndexEntry(byte* buf, size_t len)
 	}
 
 	if (extraBytes > 0)
-		std::cout << "Additional " << extraBytes << "bytes in an entry!";
+		std::cout << "Additional " << extraBytes << "bytes in an entry!" << std::endl;
 
 	return entry->Length;
 }
