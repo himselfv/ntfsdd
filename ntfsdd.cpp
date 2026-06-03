@@ -328,13 +328,14 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 
 /*
 Safety: Verify that our candidate selection contains at least all the clusters that are set *only in the newer* bitmap.
+WARNING: This can sometimes fail if you --skip segments, when those get allocated/reallocated to completely freshly used clusters. Do a one shot rcw without --skip to fix.
 */
 void verifySelectionContainsNewClusters(CandidateClusterMap& srcSelect, const Bitmap& newlyUsedClusters)
 {
 	//srcSelect is also a Bitmap so we can do a handy mass op here.
 	auto remainder = newlyUsedClusters.andNot(srcSelect);
 	if (!remainder.isZero())
-		throw std::runtime_error("Assertion failed: some of the newly used clusters are not covered by the constructed difference map!");
+		throw std::runtime_error("Assertion failed: some of the newly used clusters are not covered by the constructed difference map!\nIf you're using --skip, try running without it.");
 }
 
 

@@ -224,6 +224,8 @@ WARNING: Havoc risk. When you skip a dir alone, its index is skipped. The files 
 
 But if you mark all index allocations as dirty (``--all-index-dirty``) which is a useful thing to do sometimes, then dir indexes are effectively never skipped. Non-resident allocations because of this flag, and resident ones since they're in the MFT which is never skipped. So I think you can skip dirs in this case.
 
+WARNING: Sometimes --skip-ped segments will get assigned completely fresh clusters (unused in dest, freshly used in src). This will trigger a "some of the newly used clusters are not covered" safety stop. Run your copy or rcw without --skip once to get bitmaps in sync.
+
 
 In the same, but safer, way you can force the file clusters to ALWAYS be selected with ``--include-``. Internally this is used to handle driver magic folders such as System Volume Information. This has absolutely NO side effects except for more data to rcw/copy each time.
 
