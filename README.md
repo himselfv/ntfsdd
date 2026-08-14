@@ -376,3 +376,26 @@ Directories cache some information about the files they host, such as their size
 When the driver gets around to updating these fields, it can happen at any time, without any reasonable trigger, and the driver often does not change the directory's MFT. This is reasonable, as this update of the file's properties is not an update of the directory itself. Yet this change will be missed.
 
 You can accept that (it's just cached info anyway, or at least we hope it's *just* cached info), or enable ``--all-index-dirty``. This will force all non-resident index allocations to be treated as dirty, catching these cases.
+
+
+## FAQ
+
+### Assertion failed: srcMap[i].len == destMap[i].len
+MFT on the target is stored sufficiently differently from the source. *You might be trying to write to the wrong volume OR use the wrong volume as the source*. This is the most likely explanation!
+
+If you're sure both source and target are correct, you might have recently done some sort of heavy defrag which rearranges the MFT:
+* Manual defrag
+* The built-in Optimize Drives task runs weekly and can defrag the MFT, though it won't for SSDs.
+* Volume shrink/resize
+* Bad cluster remapping
+
+Study:
+```
+ntfs.exe --print-segment 0 [for both volumes]
+fsutil fsinfo ntfsinfo [for both volumes]
+```
+Diff the outputs of --print-segment 0 and check what changed. Find the reason that happened.
+
+How to fix? *Make sure the source and target are correct*. Do a full clone.
+
+"Optimize runs every week and ruins delta clone every time". Shouldn't be a problem for SSDs, for HDDs IF this is a problem, make it run less often, or make it skip defragmenting the MFT most of the time except once a year or something. There's not much we can safely do if the MFTs are so different. Any attempt at delta would still result in an awkward full clone with lots of corner cases.

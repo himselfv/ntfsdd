@@ -298,9 +298,13 @@ void MftDiff::verifyMftRunsCompatible()
 	auto& destMap = mftDest.vcnMap();
 	assert(srcMap.size() >= destMap.size());
 	for (size_t i = 0; i < destMap.size(); i++) {
-		assert(srcMap[i].lcnStart == destMap[i].lcnStart);
-		assert(srcMap[i].vcnStart == destMap[i].vcnStart);
-		assert(srcMap[i].len == destMap[i].len);
+		assert_eq(srcMap[i].lcnStart, destMap[i].lcnStart);
+		assert_eq(srcMap[i].vcnStart, destMap[i].vcnStart);
+		if (i < destMap.size() - 1)
+			assert_eq(srcMap[i].len, destMap[i].len);
+		else
+			//Last known run could have been expanded, this is allowed.
+			assert_leq(srcMap[i].len, destMap[i].len);
 	}
 }
 
