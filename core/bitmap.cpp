@@ -207,8 +207,81 @@ BitmapBuf Bitmap::clone() const
 {
 	BitmapBuf result;
 	result.resize(this->size);
-	memcpy(result.data, this->data, this->size / BLOCK_BITS);
+	memcpy(result.data, this->data, (this->size + 7) / 8);
 	return result;
+}
+
+BitmapBuf Bitmap::operator~() const
+{
+	BitmapBuf result;
+	result.resize(this->size);
+	result.apply_operation1(
+		[](uint64_t* ptr) { *ptr = ~*ptr; return true; }
+		);
+	return result;
+}
+
+BitmapBuf Bitmap::operator&(const Bitmap& other) const
+{
+	assert_eq(this->size, other.size);
+	BitmapBuf result;
+	result.resize(this->size);
+	this->apply_operation3(
+		other, result,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA & *srcB; }
+		);
+	return result;
+}
+
+BitmapBuf Bitmap::operator|(const Bitmap& other) const
+{
+	assert_eq(this->size, other.size);
+	BitmapBuf result;
+	result.resize(this->size);
+	this->apply_operation3(
+		other, result,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA | *srcB; }
+		);
+	return result;
+}
+
+BitmapBuf Bitmap::operator^(const Bitmap& other) const
+{
+	assert_eq(this->size, other.size);
+	BitmapBuf result;
+	result.resize(this->size);
+	this->apply_operation3(
+		other, result,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA ^ *srcB; }
+	);
+	return result;
+}
+
+void Bitmap::operator&=(const Bitmap& other)
+{
+	assert_eq(this->size, other.size);
+	this->apply_operation3(
+		other, *this,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA & *srcB; }
+		);
+}
+
+void Bitmap::operator|=(const Bitmap& other)
+{
+	assert_eq(this->size, other.size);
+	this->apply_operation3(
+		other, *this,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA | *srcB; }
+		);
+}
+
+void Bitmap::operator^=(const Bitmap& other)
+{
+	assert_eq(this->size, other.size);
+	this->apply_operation3(
+		other, *this,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA ^ *srcB; }
+		);
 }
 
 BitmapBuf Bitmap::andNot(const Bitmap& other) const
@@ -224,20 +297,8 @@ void Bitmap::andNot(const Bitmap& other, Bitmap& result) const
 {
 	this->apply_operation3(
 		other, result,
-		[&result](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA & ~*srcB; }
-		);
-}
-
-BitmapBuf Bitmap::operator^(const Bitmap& other) const
-{
-	assert_eq(this->size, other.size);
-	BitmapBuf result;
-	result.resize(this->size);
-	this->apply_operation3(
-		other, result,
-		[&result](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA ^ *srcB; }
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = *srcA & ~*srcB; }
 	);
-	return result;
 }
 
 #include <bitset>
@@ -286,6 +347,20 @@ void Bitmap::printBuf(void* buf, size_t size)
 
 BitmapBuf::BitmapBuf(size_t size) {
 	this->resize(size);
+}
+
+BitmapBuf::BitmapBuf(const BitmapBuf& other)
+{
+	*this = other;
+}
+
+BitmapBuf& BitmapBuf::operator=(const BitmapBuf& other)
+{
+	if (this != &other) {
+		this->resize(other.size);
+		memcpy(this->data, other.data, (other.size + 7) / 8);
+	}
+	return *this;
 }
 
 BitmapBuf::BitmapBuf(BitmapBuf&& other)

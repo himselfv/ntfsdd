@@ -35,9 +35,15 @@ public:
 	size_t bitCount(size_t first, size_t last) const;
 	bool isZero() const;
 	BitmapBuf clone() const;
+	BitmapBuf operator~() const;
+	BitmapBuf operator&(const Bitmap& other) const;
+	BitmapBuf operator|(const Bitmap& other) const;
+	BitmapBuf operator^(const Bitmap& other) const;
+	void operator&=(const Bitmap& other);
+	void operator|=(const Bitmap& other);
+	void operator^=(const Bitmap& other);
 	BitmapBuf andNot(const Bitmap& other) const;
 	void andNot(const Bitmap& other, Bitmap& result) const;
-	BitmapBuf operator^(const Bitmap& other) const;
 
 	void print();
 	void printNonZero();
@@ -49,6 +55,8 @@ struct BitmapBuf : public Bitmap {
 public:
 	std::vector<uint8_t> buffer;
 	BitmapBuf() {}
+	BitmapBuf(const BitmapBuf& other);
+	BitmapBuf& operator=(const BitmapBuf& other);
 	BitmapBuf(size_t size);
 	BitmapBuf(BitmapBuf&& other);
 	BitmapBuf& operator=(BitmapBuf&& other);
