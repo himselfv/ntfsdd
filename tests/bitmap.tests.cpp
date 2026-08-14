@@ -286,3 +286,253 @@ TEST_CASE("Bitmap span all 1s", "[Bitmap]") {
 	CHECK(decoded[0].offset == 0);
 	CHECK(decoded[0].length == 80);
 }
+
+TEST_CASE("BitmapBuf copy constructor and assignment", "[Bitmap]") {
+	BitmapBuf src;
+	src.resize(256);
+	src.set(5, 10);
+	src.set(100, 110);
+
+	// Copy constructor
+	BitmapBuf copy_src(src);
+	CHECK(copy_src.size == src.size);
+	CHECK(copy_src.bitCount() == src.bitCount());
+	for (size_t i = 0; i < src.size; i++)
+		CHECK(copy_src.get(i) == src.get(i));
+
+	// Copy assignment
+	BitmapBuf dst;
+	dst.resize(256);
+	dst.clear_all();
+	CHECK(dst.bitCount() == 0);
+	dst = src;
+	CHECK(dst.bitCount() == src.bitCount());
+	for (size_t i = 0; i < src.size; i++)
+		CHECK(dst.get(i) == src.get(i));
+
+	// Self-assignment
+	dst = dst;
+	for (size_t i = 0; i < dst.size; i++)
+		CHECK(dst.get(i) == src.get(i));
+}
+
+TEST_CASE("BitmapBuf move constructor and assignment", "[Bitmap]") {
+	BitmapBuf src;
+	src.resize(128);
+	src.set(10, 20);
+	size_t src_bit_count = src.bitCount();
+
+	// Move constructor
+	BitmapBuf moved(std::move(src));
+	CHECK(moved.size == 128); // size preserved
+	CHECK(moved.bitCount() == src_bit_count);
+
+	// Move assignment
+	BitmapBuf dst;
+	dst.resize(64);
+	dst = std::move(moved);
+	CHECK(dst.bitCount() == src_bit_count);
+}
+
+TEST_CASE("clone() copies all bits", "[Bitmap]") {
+	BitmapBuf src;
+	src.resize(100);
+	src.set(0, 99);
+
+	auto cloned = src.clone();
+	CHECK(cloned.size == src.size);
+	CHECK(cloned.bitCount() == src.bitCount());
+	for (size_t i = 0; i < src.size; i++)
+		CHECK(cloned.get(i) == src.get(i));
+
+	// Non-aligned size: test trailing bits in last byte
+	src.resize(50);
+	src.clear_all();
+	src.set(40, 49);
+	auto cloned2 = src.clone();
+	CHECK(cloned2.size == 50);
+	CHECK(cloned2.bitCount() == 10);
+	for (size_t i = 0; i < 50; i++)
+		CHECK(cloned2.get(i) == src.get(i));
+}
+
+TEST_CASE("operator~ (NOT)", "[Bitmap]") {
+	BitmapBuf src;
+	src.resize(32);
+	src.clear_all();
+	src.set(0, 3);   // 0,1,2,3 = 1
+	src.set(8, 11);  // 8,9,10,11 = 1
+
+	auto result = ~src;
+	CHECK(result.size == src.size);
+	CHECK(result.bitCount() == 24); // 32 - 8 set bits
+
+	for (size_t i = 0; i < src.size; i++)
+		CHECK(result.get(i) == !src.get(i));
+}
+
+TEST_CASE("operator& (AND)", "[Bitmap]") {
+	BitmapBuf a, b;
+	a.resize(64);
+	b.resize(64);
+	a.clear_all();
+	b.clear_all();
+
+	a.set(0, 15);
+	a.set(32, 47);
+	b.set(8, 24);
+	b.set(40, 56);
+
+	auto result = a & b;
+	// Overlap: 8..15 and 40..47
+	CHECK(result.bitCount() == 24); // 8 + 8 = 16... wait let me recalc
+	// a: [0..15] [32..47]
+	// b: [8..24] [40..56]
+	// a&b: [8..15] [40..47] = 8 + 8 = 16 bits
+	CHECK(result.bitCount() == 16);
+
+	for (size_t i = 0; i < 64; i++)
+		CHECK(result.get(i) == (a.get(i) && b.get(i)));
+}
+
+TEST_CASE("operator| (OR)", "[Bitmap]") {
+	BitmapBuf a, b;
+	a.resize(64);
+	b.resize(64);
+	a.clear_all();
+	b.clear_all();
+
+	a.set(0, 7);
+	a.set(16, 23);
+	b.set(4, 12);
+	b.set(20, 28);
+
+	auto result = a | b;
+	// Union: [0..12] [16..28] = 13 + 13 = 26 bits
+	CHECK(result.bitCount() == 26);
+
+	for (size_t i = 0; i < 64; i++)
+		CHECK(result.get(i) == (a.get(i) || b.get(i)));
+}
+
+TEST_CASE("operator&= (self-applied AND)", "[Bitmap]") {
+	BitmapBuf a;
+	a.resize(64);
+	a.clear_all();
+	BitmapBuf b;
+	b.resize(64);
+	b.clear_all();
+
+	a.set(0, 15);
+	a.set(32, 47);
+	b.set(8, 24);
+	b.set(40, 56);
+
+	a &= b;
+	// a & b = [8..15] [40..47] = 16 bits
+	CHECK(a.bitCount() == 16);
+
+}
+
+TEST_CASE("operator|= (self-applied OR)", "[Bitmap]") {
+	BitmapBuf a;
+	a.resize(64);
+	a.clear_all();
+	BitmapBuf b;
+	b.resize(64);
+	b.clear_all();
+
+	a.set(0, 7);
+	b.set(4, 11);
+
+	a |= b;
+	// Union: [0..11] = 12 bits
+	CHECK(a.bitCount() == 12);
+}
+
+TEST_CASE("operator^= (self-applied XOR)", "[Bitmap]") {
+	BitmapBuf a;
+	a.resize(64);
+	a.clear_all();
+	BitmapBuf b;
+	b.resize(64);
+	b.clear_all();
+
+	a.set(0, 15);
+	b.set(8, 23);
+
+	a ^= b;
+	// XOR: [0..7] [16..23] = 8 + 8 = 16 bits
+	CHECK(a.bitCount() == 16);
+}
+
+TEST_CASE("Bitwise operators cross-block boundaries", "[Bitmap]") {
+	BitmapBuf a, b;
+	a.resize(128);
+	b.resize(128);
+	a.clear_all();
+	b.clear_all();
+
+	// Cross block boundary
+	a.set(60, 70);
+	b.set(62, 72);
+
+	auto and_result = a & b;
+	CHECK(and_result.get(60) == false);
+	CHECK(and_result.get(62) == true);
+	CHECK(and_result.get(64) == true);
+	CHECK(and_result.get(68) == true);
+	CHECK(and_result.get(70) == true);
+	CHECK(and_result.get(71) == false);
+	CHECK(and_result.get(72) == false);
+	CHECK(and_result.bitCount() == 11); // bits 62..72 = 11 bits
+
+	auto or_result = a | b;
+	CHECK(or_result.bitCount() == 13); // bits 60..72 = 13 bits
+
+	auto xor_result = a ^ b;
+	CHECK(xor_result.bitCount() == 6); // bits 60,61,69,70,71,72 = 6 bits
+}
+
+TEST_CASE("Self-applied operators with self", "[Bitmap]") {
+	BitmapBuf a;
+	a.resize(64);
+	a.clear_all();
+	a.set(0, 63);
+
+	// ^= with self should produce all zeros
+	a ^= a;
+	CHECK(a.bitCount() == 0);
+
+	// Re-set for &= test
+	a.set(0, 63);
+	a &= a; // &= with self should be identity
+	CHECK(a.bitCount() == 64);
+
+	// Re-set for |= test
+	a.clear_all();
+	a.set(0, 63);
+	a |= a; // |= with self should be identity
+	CHECK(a.bitCount() == 64);
+}
+
+TEST_CASE("clone() preserves non-aligned bitmaps", "[Bitmap]") {
+	// Test with size that doesn't align to byte boundary
+	for (size_t size : {1, 7, 8, 9, 63, 64, 65, 127, 128, 129, 1000}) {
+		BitmapBuf src;
+		src.resize(size);
+		src.clear_all();
+		// Set every other bit
+		for (size_t i = 0; i < size; i += 2)
+			src.set(i, i);
+
+		auto cloned = src.clone();
+		CHECK(cloned.size == size);
+		CHECK(cloned.bitCount() == src.bitCount());
+
+		for (size_t i = 0; i < size; i++) {
+			CAPTURE(i, size);
+			CHECK(cloned.get(i) == src.get(i));
+		}
+	}
+}
