@@ -327,8 +327,17 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 
 
 /*
-Safety: Verify that our candidate selection contains at least all the clusters that are set *only in the newer* bitmap.
-WARNING: This can sometimes fail if you --skip segments, when those get allocated/reallocated to completely freshly used clusters. Do a one shot rcw without --skip to fix.
+Safety: Take the clusters that are set *only in the newer* bitmap.
+  These must belong to some of the changed files, and thus must be covered by our candidate selection.
+
+WARNING:
+  This can sometimes fail if you --skip segments when those get allocated/reallocated to completely freshly used clusters. Do a one shot rcw without --skip to fix.
+
+  We could try to exclude the skipped segment clusters from this check (either by temporarily adding them to selection,
+  or by excluding from the newlyUsedClusters set).
+
+  But this doesn't fix the principal problem: these newly allocated clusters will remain unaccounted-for unless we copy the skipped files!
+  This really can't be fixed except by doing a full sync once this problem arises.
 */
 void verifySelectionContainsNewClusters(CandidateClusterMap& srcSelect, const Bitmap& newlyUsedClusters)
 {
