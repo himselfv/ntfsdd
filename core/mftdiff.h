@@ -130,6 +130,9 @@ public:
 
 	//Populated during the scan
 	CandidateClusterMap srcDiff;
+	//Clusters that would be in our srcDiff set if not for our skipping rules.
+	//These are still needed for some of the safety checks so we collect them separately.
+	CandidateClusterMap srcDiffSkipped;
 
 	//If set, do not consider segments where ONLY the fixup has changed as dirty. Double-edged sword.
 	bool ignoreFixupChanges = true;

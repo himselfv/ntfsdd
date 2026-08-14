@@ -34,6 +34,7 @@ public:
 	size_t bitCount() const;
 	size_t bitCount(size_t first, size_t last) const;
 	bool isZero() const;
+	BitmapBuf clone() const;
 	BitmapBuf andNot(const Bitmap& other) const;
 	void andNot(const Bitmap& other, Bitmap& result) const;
 	BitmapBuf operator^(const Bitmap& other) const;

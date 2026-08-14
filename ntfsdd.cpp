@@ -330,14 +330,8 @@ bool compareBitmaps(const VOLUME_BITMAP_BUFFER* bmp1, const Bitmap* bmp2)
 Safety: Take the clusters that are set *only in the newer* bitmap.
   These must belong to some of the changed files, and thus must be covered by our candidate selection.
 
-WARNING:
-  This can sometimes fail if you --skip segments when those get allocated/reallocated to completely freshly used clusters. Do a one shot rcw without --skip to fix.
-
-  We could try to exclude the skipped segment clusters from this check (either by temporarily adding them to selection,
-  or by excluding from the newlyUsedClusters set).
-
-  But this doesn't fix the principal problem: these newly allocated clusters will remain unaccounted-for unless we copy the skipped files!
-  This really can't be fixed except by doing a full sync once this problem arises.
+This could sometimes fail before if you --skip segments when those get allocated/reallocated to completely freshly used clusters.
+For this reason we count skipped segment clusters separately and merge before verifying.
 */
 void verifySelectionContainsNewClusters(CandidateClusterMap& srcSelect, const Bitmap& newlyUsedClusters)
 {
@@ -861,13 +855,24 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 		selectedClusterCount = srcSelect.bitCount();
 		qInfo() << "Selected cluster count: " << selectedClusterCount << ", size: " << dataSizeToStr(selectedClusterCount*src.volumeData().BytesPerCluster) << std::endl;
 
+		//If we skip segments, we have to merge skipped dirty clusters here because those could contain new allocations too:
+		CandidateClusterMap mergedSelect;
+		if (auto mftDiff = dynamic_cast<MftDiff*>(mftScanner.get())) {
+			LCN selectedClusterCountSkipped = mftDiff->srcDiffSkipped.bitCount();
+			qInfo() << "Selected cluster count (skipped): " << selectedClusterCountSkipped << ", size: " << dataSizeToStr(selectedClusterCountSkipped*src.volumeData().BytesPerCluster) << std::endl;
+			if (selectedClusterCountSkipped > 0)
+				mergedSelect = srcSelect ^ mftDiff->srcDiffSkipped;
+		}
+		else
+			mergedSelect = std::move(srcSelect.clone());
+
 		//Safety: Verify that our resulting list contains all clusters unique to srcBitmap (that is, switched to 1 since destBitmap).
 		//If $Bitmap shows a block was turned from free to used, stop. That should not happen if I'm parsing MFT correctly.
 		qVerbose() << "Verifying: The selection contains all newly allocated clusters..." << std::endl;
 		if (bBlankTarget)
-			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap());
+			verifySelectionContainsNewClusters(mergedSelect, srcBitmap.asBitmap());
 		else
-			verifySelectionContainsNewClusters(srcSelect, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
+			verifySelectionContainsNewClusters(mergedSelect, srcBitmap.asBitmap().andNot(destBitmap->asBitmap()));
 	}
 
 

@@ -324,6 +324,8 @@ void MftDiff::scanInit()
 
 	srcDiff.resize(TotalClusters);
 	srcDiff.clear_all();
+	srcDiffSkipped.resize(TotalClusters);
+	srcDiffSkipped.clear_all();
 }
 
 void MftDiff::scan()
@@ -487,6 +489,8 @@ void MftDiff::onDirtyFile(const SegmentNumber segmentNo, const FileEntry& fi)
 	if (fi.skip) {
 		diffStats.filesSkipped++;
 		diffStats.clustersSkipped += fi.totalClusters;
+		for (auto& run : fi.runList)
+			srcDiffSkipped.set(run);
 		return;
 	}
 

@@ -203,6 +203,14 @@ bool Bitmap::isZero() const
 	return result;
 }
 
+BitmapBuf Bitmap::clone() const
+{
+	BitmapBuf result;
+	result.resize(this->size);
+	memcpy(result.data, this->data, this->size / BLOCK_BITS);
+	return result;
+}
+
 BitmapBuf Bitmap::andNot(const Bitmap& other) const
 {
 	assert_eq(this->size, other.size);
