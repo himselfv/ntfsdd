@@ -861,7 +861,9 @@ Compares and updates NTFS volume clones in a dangerously efficient fashion.)");
 			LCN selectedClusterCountSkipped = mftDiff->srcDiffSkipped.bitCount();
 			qInfo() << "Selected cluster count (skipped): " << selectedClusterCountSkipped << ", size: " << dataSizeToStr(selectedClusterCountSkipped*src.volumeData().BytesPerCluster) << std::endl;
 			if (selectedClusterCountSkipped > 0)
-				mergedSelect = srcSelect | mftDiff->srcDiffSkipped;
+				mergedSelect = std::move(srcSelect | mftDiff->srcDiffSkipped);
+			else
+				mergedSelect = std::move(srcSelect.clone());
 		}
 		else
 			mergedSelect = std::move(srcSelect.clone());
