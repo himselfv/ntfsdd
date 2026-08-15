@@ -487,7 +487,7 @@ TEST_CASE("Bitwise operators cross-block boundaries", "[Bitmap]") {
 	CHECK(or_result.bitCount() == 13); // bits 60..72 = 13 bits
 
 	auto xor_result = a ^ b;
-	CHECK(xor_result.bitCount() == 6); // bits 60,61,71,72 = 4 bits
+	CHECK(xor_result.bitCount() == 4); // bits 60,61,71,72 = 4 bits
 }
 
 TEST_CASE("Self-applied operators with self", "[Bitmap]") {
