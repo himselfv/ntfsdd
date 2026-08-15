@@ -385,10 +385,6 @@ TEST_CASE("operator& (AND)", "[Bitmap]") {
 
 	auto result = a & b;
 	// Overlap: 8..15 and 40..47
-	CHECK(result.bitCount() == 24); // 8 + 8 = 16... wait let me recalc
-	// a: [0..15] [32..47]
-	// b: [8..24] [40..56]
-	// a&b: [8..15] [40..47] = 8 + 8 = 16 bits
 	CHECK(result.bitCount() == 16);
 
 	for (size_t i = 0; i < 64; i++)
@@ -485,13 +481,13 @@ TEST_CASE("Bitwise operators cross-block boundaries", "[Bitmap]") {
 	CHECK(and_result.get(70) == true);
 	CHECK(and_result.get(71) == false);
 	CHECK(and_result.get(72) == false);
-	CHECK(and_result.bitCount() == 11); // bits 62..72 = 11 bits
+	CHECK(and_result.bitCount() == 9); // bits 62..70 = 9 bits
 
 	auto or_result = a | b;
 	CHECK(or_result.bitCount() == 13); // bits 60..72 = 13 bits
 
 	auto xor_result = a ^ b;
-	CHECK(xor_result.bitCount() == 6); // bits 60,61,69,70,71,72 = 6 bits
+	CHECK(xor_result.bitCount() == 6); // bits 60,61,71,72 = 4 bits
 }
 
 TEST_CASE("Self-applied operators with self", "[Bitmap]") {

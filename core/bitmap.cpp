@@ -215,8 +215,9 @@ BitmapBuf Bitmap::operator~() const
 {
 	BitmapBuf result;
 	result.resize(this->size);
-	result.apply_operation1(
-		[](uint64_t* ptr) { *ptr = ~*ptr; return true; }
+	this->apply_operation3(
+		*this, result,
+		[](uint64_t* srcA, uint64_t* srcB, uint64_t* dest) { *dest = ~*srcA; return true; }
 		);
 	return result;
 }
